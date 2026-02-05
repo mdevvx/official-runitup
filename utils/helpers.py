@@ -42,6 +42,22 @@ def get_tier_emoji(tier: str) -> str:
     return TIERS.get(tier, {}).get("emoji", "⚪")
 
 
+def get_tier_role_mention(tier: str, guild: discord.Guild = None) -> str:
+    """Get role mention for tier if available, otherwise return role name"""
+    from config.constants import TIERS
+
+    tier_data = TIERS.get(tier, {})
+    role_name = tier_data.get("role_name", tier)
+
+    # If guild is provided, try to find and mention the role
+    if guild:
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role:
+            return role.mention
+
+    return role_name
+
+
 async def send_error_embed(interaction: discord.Interaction, message: str):
     """Send error embed"""
     embed = discord.Embed(

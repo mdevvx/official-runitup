@@ -131,11 +131,11 @@ class Submissions(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
             # Check if challenge is active
-            if not is_challenge_active():
-                await send_error_embed(
-                    interaction, "❌ The challenge is not currently active!"
-                )
-                return
+            # if not is_challenge_active():
+            #     await send_error_embed(
+            #         interaction, "❌ The challenge is not currently active!"
+            #     )
+            #     return
 
             # Get user data
             user_data = await UserModel.get_or_create(
@@ -216,11 +216,11 @@ class Submissions(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
             # Check if challenge is active
-            if not is_challenge_active():
-                await send_error_embed(
-                    interaction, "❌ The challenge is not currently active!"
-                )
-                return
+            # if not is_challenge_active():
+            #     await send_error_embed(
+            #         interaction, "❌ The challenge is not currently active!"
+            #     )
+            #     return
 
             # Check if already a scaler
             user_data = await UserModel.get_or_create(

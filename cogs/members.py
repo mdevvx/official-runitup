@@ -6,7 +6,11 @@ from datetime import datetime
 
 from database.models import UserModel, DailyActivityModel
 from utils.logger import get_logger
-from utils.embeds import create_user_stats_embed, create_leaderboard_embed
+from utils.embeds import (
+    create_user_stats_embed,
+    create_leaderboard_embed,
+    create_rank_embed,
+)
 from utils.helpers import is_challenge_active
 
 logger = get_logger(__name__)
@@ -44,8 +48,10 @@ class Members(commands.Cog):
             # Track activity
             await DailyActivityModel.track_activity(message.author.id)
 
-            # Try to award daily point (will only award once per day)
-            awarded = await DailyActivityModel.award_daily_point(message.author.id)
+            # Try to award daily point (will only award once per day) with bot instance
+            awarded = await DailyActivityModel.award_daily_point(
+                message.author.id, bot=self.bot
+            )
 
             if awarded:
                 logger.info(f"✅ Awarded daily activity point to {message.author.name}")
@@ -64,8 +70,8 @@ class Members(commands.Cog):
                 interaction.user.id, interaction.user.name
             )
 
-            # Create embed
-            embed = create_user_stats_embed(user_data)
+            # Create embed with user mention
+            embed = create_user_stats_embed(user_data, discord_user=interaction.user)
 
             # Get rank
             leaderboard = await UserModel.get_leaderboard(limit=100)
@@ -151,23 +157,10 @@ class Members(commands.Cog):
                 )
                 return
 
-            embed = discord.Embed(
-                title=f"📊 Rank for {target_user.name}", color=discord.Color.blue()
+            # Create embed with proper mentions
+            embed = create_rank_embed(
+                user_data, rank, len(leaderboard), discord_user=target_user
             )
-
-            embed.add_field(
-                name="🏅 Current Rank",
-                value=f"**#{rank}** of {len(leaderboard)}",
-                inline=False,
-            )
-
-            embed.add_field(
-                name="📊 Points",
-                value=f"**{user_data['total_points']}** points",
-                inline=True,
-            )
-
-            embed.add_field(name="🎖️ Tier", value=user_data["tier"], inline=True)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -196,9 +189,10 @@ class Members(commands.Cog):
             current_tier = user_data["tier"]
             points = user_data["total_points"]
 
-            # Create embed
+            # Create embed with user mention
             embed = discord.Embed(
                 title=f"{get_tier_emoji(current_tier)} Your Tier Progress",
+                description=f"Tier progress for {interaction.user.mention}",
                 color=discord.Color.blue(),
             )
 

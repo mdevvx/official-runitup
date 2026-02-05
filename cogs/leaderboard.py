@@ -114,9 +114,9 @@ class Leaderboard(commands.Cog):
                 elif emoji == "💯":
                     hundred_count = reaction.count
 
-            # Update value post
+            # Update value post with bot instance for role updates
             await ValuePostModel.update_reactions(
-                message.id, fire_count, gem_count, hundred_count
+                message.id, fire_count, gem_count, hundred_count, bot=self.bot
             )
 
             logger.debug(
@@ -146,10 +146,13 @@ class Leaderboard(commands.Cog):
             if response.data:
                 post = response.data[0]
 
-                # Remove points from user if they had any
+                # Remove points from user if they had any (with bot instance)
                 if post["total_points"] > 0:
                     await UserModel.update_points(
-                        post["user_id"], -post["total_points"], "Value post deleted"
+                        post["user_id"],
+                        -post["total_points"],
+                        "Value post deleted",
+                        bot=self.bot,
                     )
 
                 # Delete the post record
@@ -199,13 +202,14 @@ class Leaderboard(commands.Cog):
                         "message_id", message_id
                     ).execute()
 
-                    # Award or remove pin points
+                    # Award or remove pin points (with bot instance)
                     points_change = POINTS["PINNED"] if is_pinned else -POINTS["PINNED"]
 
                     await UserModel.update_points(
                         post["user_id"],
                         points_change,
                         "Post pinned" if is_pinned else "Post unpinned",
+                        bot=self.bot,
                     )
 
                     # Recalculate total post points

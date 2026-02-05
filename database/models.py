@@ -20,7 +20,9 @@ class UserModel:
             )
 
             if response.data:
-                return response.data[0]
+                user_data = response.data[0]
+                user_data["mention"] = f"<@{user_id}>"
+                return user_data
 
             # Create new user
             new_user = {
@@ -34,7 +36,9 @@ class UserModel:
 
             response = supabase.table("users").insert(new_user).execute()
             logger.info(f"✅ Created new user: {username} ({user_id})")
-            return response.data[0]
+            user_data = response.data[0]
+            user_data["mention"] = f"<@{user_id}>"
+            return user_data
 
         except Exception as e:
             logger.error(f"❌ Error in get_or_create for user {user_id}: {e}")
@@ -42,14 +46,15 @@ class UserModel:
 
     @staticmethod
     async def update_points(
-        user_id: int, points_change: int, reason: str
+        user_id: int, points_change: int, reason: str, bot=None
     ) -> Dict[str, Any]:
-        """Update user points and tier"""
+        """Update user points and tier, and update Discord roles immediately"""
         try:
             supabase = get_supabase()
 
             # Get current user
             user = await UserModel.get_by_id(user_id)
+            old_tier = user["tier"]
             new_total = user["total_points"] + points_change
 
             # Determine new tier
@@ -77,11 +82,81 @@ class UserModel:
             logger.info(
                 f"✅ Updated points for user {user_id}: {points_change:+d} ({reason})"
             )
-            return response.data[0]
+
+            # Update Discord roles immediately if tier changed
+            if old_tier != new_tier and bot:
+                await UserModel.update_user_role(user_id, new_tier, bot)
+                logger.info(
+                    f"🎖️ Updated role for user {user_id}: {old_tier} → {new_tier}"
+                )
+
+            updated_user = response.data[0]
+            updated_user["mention"] = f"<@{user_id}>"
+            return updated_user
 
         except Exception as e:
             logger.error(f"❌ Error updating points for user {user_id}: {e}")
             raise
+
+    @staticmethod
+    async def update_user_role(user_id: int, new_tier: str, bot):
+        """Update user's Discord role based on their tier"""
+        try:
+            from config.settings import GUILD_ID
+            import discord
+
+            # Get guild
+            guild = bot.get_guild(GUILD_ID)
+            if not guild:
+                logger.warning(f"⚠️ Guild not found for role update")
+                return
+
+            # Get member
+            member = guild.get_member(user_id)
+            if not member:
+                logger.warning(f"⚠️ Member {user_id} not found in guild")
+                return
+
+            # Get all tier roles
+            tier_roles = {}
+            for tier_name, tier_data in TIERS.items():
+                role = discord.utils.get(guild.roles, name=tier_data["role_name"])
+                if role:
+                    tier_roles[tier_name] = role
+
+            if not tier_roles:
+                logger.warning("⚠️ No tier roles found in guild")
+                return
+
+            # Get the new tier role
+            new_tier_role = tier_roles.get(new_tier)
+            if not new_tier_role:
+                logger.warning(f"⚠️ Role for tier {new_tier} not found")
+                return
+
+            # Check if member already has the correct role
+            if new_tier_role in member.roles:
+                logger.debug(f"✅ User {user_id} already has correct role")
+                return
+
+            # Remove all other tier roles
+            roles_to_remove = [
+                role
+                for tier, role in tier_roles.items()
+                if tier != new_tier and role in member.roles
+            ]
+
+            # Update roles
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason="Tier changed")
+                logger.info(f"🗑️ Removed old tier roles from {member.name}")
+
+            await member.add_roles(new_tier_role, reason="Tier changed")
+            logger.info(f"✅ Added {new_tier_role.name} to {member.name}")
+
+        except Exception as e:
+            logger.error(f"❌ Error updating role for user {user_id}: {e}")
+            # Don't raise - role update failure shouldn't break points update
 
     @staticmethod
     def calculate_tier(points: int) -> str:
@@ -99,7 +174,11 @@ class UserModel:
             response = (
                 supabase.table("users").select("*").eq("user_id", user_id).execute()
             )
-            return response.data[0] if response.data else None
+            if response.data:
+                user_data = response.data[0]
+                user_data["mention"] = f"<@{user_id}>"
+                return user_data
+            return None
         except Exception as e:
             logger.error(f"❌ Error getting user {user_id}: {e}")
             raise
@@ -116,6 +195,9 @@ class UserModel:
                 .limit(limit)
                 .execute()
             )
+            # Add mention to each user
+            for user in response.data:
+                user["mention"] = f"<@{user['user_id']}>"
             return response.data
         except Exception as e:
             logger.error(f"❌ Error getting leaderboard: {e}")
@@ -139,7 +221,9 @@ class UserModel:
             )
 
             logger.info(f"✅ Set scaler status for user {user_id}: {is_scaler}")
-            return response.data[0]
+            user_data = response.data[0]
+            user_data["mention"] = f"<@{user_id}>"
+            return user_data
         except Exception as e:
             logger.error(f"❌ Error setting scaler for user {user_id}: {e}")
             raise
@@ -198,7 +282,9 @@ class DailyActivityModel:
             raise
 
     @staticmethod
-    async def award_daily_point(user_id: int, activity_date: date = None) -> bool:
+    async def award_daily_point(
+        user_id: int, activity_date: date = None, bot=None
+    ) -> bool:
         """Award daily activity point if not already awarded"""
         try:
             if activity_date is None:
@@ -227,7 +313,7 @@ class DailyActivityModel:
                     "id", activity["id"]
                 ).execute()
 
-                await UserModel.update_points(user_id, 1, "Daily activity")
+                await UserModel.update_points(user_id, 1, "Daily activity", bot=bot)
                 return True
 
             return False
@@ -280,7 +366,7 @@ class ValuePostModel:
 
     @staticmethod
     async def update_reactions(
-        message_id: int, fire: int, gem: int, hundred: int
+        message_id: int, fire: int, gem: int, hundred: int, bot=None
     ) -> Dict[str, Any]:
         """Update reaction counts and recalculate points"""
         try:
@@ -335,6 +421,7 @@ class ValuePostModel:
                     current_post["user_id"],
                     points_diff,
                     f"Value post reactions updated",
+                    bot=bot,
                 )
 
             return response.data[0]
@@ -399,7 +486,7 @@ class SubmissionModel:
 
     @staticmethod
     async def approve(
-        submission_id: int, reviewed_by: int, points: int
+        submission_id: int, reviewed_by: int, points: int, bot=None
     ) -> Dict[str, Any]:
         """Approve submission and award points"""
         try:
@@ -438,6 +525,7 @@ class SubmissionModel:
                 submission["user_id"],
                 points,
                 f"{submission['submission_type']} approved",
+                bot=bot,
             )
 
             logger.info(f"✅ Approved submission {submission_id}: +{points} points")

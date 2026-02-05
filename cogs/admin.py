@@ -10,6 +10,7 @@ from utils.helpers import (
     send_error_embed,
     send_success_embed,
     format_points,
+    get_tier_role_mention,
 )
 from utils.embeds import create_leaderboard_embed
 from config.settings import LEADERBOARD_CHANNEL_ID
@@ -60,8 +61,13 @@ class Admin(commands.Cog):
             # Ensure user exists
             await UserModel.get_or_create(user.id, user.name)
 
-            # Add points
-            updated_user = await UserModel.update_points(user.id, points, reason)
+            # Add points with bot instance for immediate role update
+            updated_user = await UserModel.update_points(
+                user.id, points, reason, bot=self.bot
+            )
+
+            # Get tier role mention
+            tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
 
             # Log action
             logger.info(
@@ -73,7 +79,8 @@ class Admin(commands.Cog):
                 f"✅ Added **{format_points(points)}** points to {user.mention}\n\n"
                 f"**Reason:** {reason}\n"
                 f"**New Total:** {updated_user['total_points']} points\n"
-                f"**Tier:** {updated_user['tier']}",
+                f"**Tier:** {tier_role}\n"
+                f"🎖️ Discord role updated automatically!",
             )
 
         except Exception as e:
@@ -112,12 +119,17 @@ class Admin(commands.Cog):
             if user_data["total_points"] < points:
                 await send_error_embed(
                     interaction,
-                    f"❌ User only has {user_data['total_points']} points. Cannot remove {points}.",
+                    f"❌ {user.mention} only has {user_data['total_points']} points. Cannot remove {points}.",
                 )
                 return
 
-            # Remove points (negative value)
-            updated_user = await UserModel.update_points(user.id, -points, reason)
+            # Remove points (negative value) with bot instance for immediate role update
+            updated_user = await UserModel.update_points(
+                user.id, -points, reason, bot=self.bot
+            )
+
+            # Get tier role mention
+            tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
 
             # Log action
             logger.info(
@@ -129,7 +141,8 @@ class Admin(commands.Cog):
                 f"✅ Removed **{points}** points from {user.mention}\n\n"
                 f"**Reason:** {reason}\n"
                 f"**New Total:** {updated_user['total_points']} points\n"
-                f"**Tier:** {updated_user['tier']}",
+                f"**Tier:** {tier_role}\n"
+                f"🎖️ Discord role updated automatically!",
             )
 
         except Exception as e:
@@ -168,10 +181,13 @@ class Admin(commands.Cog):
             # Calculate difference
             points_diff = points - current_points
 
-            # Update points
+            # Update points with bot instance for immediate role update
             updated_user = await UserModel.update_points(
-                user.id, points_diff, f"Points set by admin: {reason}"
+                user.id, points_diff, f"Points set by admin: {reason}", bot=self.bot
             )
+
+            # Get tier role mention
+            tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
 
             # Log action
             logger.info(
@@ -184,7 +200,8 @@ class Admin(commands.Cog):
                 f"**Reason:** {reason}\n"
                 f"**Previous Total:** {current_points} points\n"
                 f"**Change:** {format_points(points_diff)}\n"
-                f"**Tier:** {updated_user['tier']}",
+                f"**Tier:** {tier_role}\n"
+                f"🎖️ Discord role updated automatically!",
             )
 
         except Exception as e:
@@ -208,8 +225,8 @@ class Admin(commands.Cog):
             # Get user data
             user_data = await UserModel.get_or_create(user.id, user.name)
 
-            # Create base embed
-            embed = create_user_stats_embed(user_data)
+            # Create base embed with user mention
+            embed = create_user_stats_embed(user_data, discord_user=user)
 
             # Get recent points history
             supabase = get_supabase()
@@ -324,7 +341,7 @@ class Admin(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title="📥 Pending Submissions",
+                title="🔥 Pending Submissions",
                 description=f"Total pending: **{len(submissions)}**",
                 color=discord.Color.orange(),
             )
@@ -332,14 +349,17 @@ class Admin(commands.Cog):
             for submission in submissions[:10]:  # Show first 10
                 user = await self.bot.fetch_user(submission["user_id"])
 
-                value = f"**Type:** {submission['submission_type']}\n"
+                value = f"**User:** {user.mention}\n"
+                value += f"**Type:** {submission['submission_type']}\n"
                 if submission.get("amount"):
                     value += f"**Amount:** ${submission['amount']:.2f}\n"
                 if submission.get("referral_type"):
                     value += f"**Referral Type:** {submission['referral_type']}\n"
                 value += f"**ID:** `{submission['id']}`"
 
-                embed.add_field(name=f"{user.name}", value=value, inline=False)
+                embed.add_field(
+                    name=f"Submission {submission['id']}", value=value, inline=False
+                )
 
             if len(submissions) > 10:
                 embed.set_footer(text=f"Showing 10 of {len(submissions)} submissions")

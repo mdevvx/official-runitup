@@ -13,7 +13,7 @@ def create_leaderboard_embed(
         title=title,
         description="Top performers in the RunItUp Q1 Challenge",
         color=discord.Color.gold(),
-        timestamp=datetime.utcnow(),
+        # timestamp=datetime.utcnow(),
     )
 
     if not users:
@@ -31,9 +31,10 @@ def create_leaderboard_embed(
         tier_emoji = get_tier_emoji(user["tier"])
         scaler_badge = " ⚙️" if user.get("is_scaler") else ""
 
-        leaderboard_text += (
-            f"{medal} **{user['username']}** {tier_emoji}{scaler_badge}\n"
-        )
+        # Use mention field that's added in models.py
+        user_mention = user.get("mention", f"<@{user['user_id']}>")
+
+        leaderboard_text += f"{medal} **{user_mention}** {tier_emoji}{scaler_badge}\n"
         leaderboard_text += f"    └ {user['total_points']} points\n\n"
 
     embed.description = leaderboard_text
@@ -42,13 +43,24 @@ def create_leaderboard_embed(
     return embed
 
 
-def create_user_stats_embed(user_data: Dict[str, Any]) -> discord.Embed:
-    """Create user stats embed"""
+def create_user_stats_embed(
+    user_data: Dict[str, Any], discord_user: discord.User = None
+) -> discord.Embed:
+    """Create user stats embed with user mention"""
     tier_emoji = get_tier_emoji(user_data["tier"])
     tier_name = TIERS[user_data["tier"]]["role_name"]
 
+    # Get user mention - prefer from discord_user, fallback to mention field or construct
+    if discord_user:
+        user_mention = discord_user.mention
+        display_name = discord_user.display_name
+    else:
+        user_mention = user_data.get("mention", f"<@{user_data['user_id']}>")
+        display_name = user_data["username"]
+
     embed = discord.Embed(
-        title=f"{tier_emoji} {user_data['username']}'s Stats",
+        title=f"{tier_emoji} {display_name}'s Stats",
+        description=f"Stats for {user_mention}",
         color=discord.Color.blue(),
         timestamp=datetime.utcnow(),
     )
@@ -59,6 +71,12 @@ def create_user_stats_embed(user_data: Dict[str, Any]) -> discord.Embed:
         inline=True,
     )
 
+    # Show tier with role mention format
+    tier_role_mention = (
+        f"<@&{TIERS[user_data['tier']].get('role_id', '')}>"
+        if TIERS[user_data["tier"]].get("role_id")
+        else tier_name
+    )
     embed.add_field(name="🎖️ Tier", value=f"{tier_emoji} **{tier_name}**", inline=True)
 
     if user_data.get("is_scaler"):
@@ -75,12 +93,50 @@ def create_user_stats_embed(user_data: Dict[str, Any]) -> discord.Embed:
     return embed
 
 
+def create_rank_embed(
+    user_data: Dict[str, Any], rank: int, total: int, discord_user: discord.User = None
+) -> discord.Embed:
+    """Create rank embed with user and tier mentions"""
+    tier_emoji = get_tier_emoji(user_data["tier"])
+    tier_name = TIERS[user_data["tier"]]["role_name"]
+
+    # Get user mention
+    if discord_user:
+        user_mention = discord_user.mention
+        display_name = discord_user.display_name
+    else:
+        user_mention = user_data.get("mention", f"<@{user_data['user_id']}>")
+        display_name = user_data["username"]
+
+    embed = discord.Embed(
+        title=f"📊 Rank for {display_name}",
+        description=f"Ranking details for {user_mention}",
+        color=discord.Color.blue(),
+    )
+
+    embed.add_field(
+        name="🏅 Current Rank",
+        value=f"**#{rank}** of {total}",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="📊 Points",
+        value=f"**{user_data['total_points']}** points",
+        inline=True,
+    )
+
+    embed.add_field(name="🎖️ Tier", value=f"{tier_emoji} **{tier_name}**", inline=True)
+
+    return embed
+
+
 def create_submission_embed(
     submission: Dict[str, Any], user: discord.User
 ) -> discord.Embed:
     """Create submission review embed"""
     embed = discord.Embed(
-        title=f"📥 New {submission['submission_type'].title()} Submission",
+        title=f"🔥 New {submission['submission_type'].title()} Submission",
         color=discord.Color.orange(),
         timestamp=datetime.utcnow(),
     )
