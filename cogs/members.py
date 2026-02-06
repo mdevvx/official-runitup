@@ -9,7 +9,6 @@ from utils.logger import get_logger
 from utils.embeds import (
     create_user_stats_embed,
     create_leaderboard_embed,
-    create_rank_embed,
 )
 from utils.helpers import is_challenge_active
 
@@ -125,49 +124,6 @@ class Members(commands.Cog):
             logger.error(f"❌ Error in leaderboard command: {e}")
             await interaction.followup.send(
                 "❌ An error occurred while fetching the leaderboard.", ephemeral=True
-            )
-
-    @app_commands.command(name="rank", description="Check your current rank")
-    async def rank(
-        self, interaction: discord.Interaction, user: Optional[discord.Member] = None
-    ):
-        """Check rank of user"""
-        try:
-            await interaction.response.defer(ephemeral=True)
-
-            target_user = user or interaction.user
-
-            # Get user data
-            user_data = await UserModel.get_or_create(target_user.id, target_user.name)
-
-            # Get full leaderboard to find rank
-            leaderboard = await UserModel.get_leaderboard(limit=1000)
-            rank = next(
-                (
-                    i + 1
-                    for i, u in enumerate(leaderboard)
-                    if u["user_id"] == target_user.id
-                ),
-                None,
-            )
-
-            if rank is None:
-                await interaction.followup.send(
-                    f"❌ Could not find rank for {target_user.mention}", ephemeral=True
-                )
-                return
-
-            # Create embed with proper mentions
-            embed = create_rank_embed(
-                user_data, rank, len(leaderboard), discord_user=target_user
-            )
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"❌ Error in rank command: {e}")
-            await interaction.followup.send(
-                "❌ An error occurred while checking rank.", ephemeral=True
             )
 
     @app_commands.command(

@@ -18,7 +18,7 @@ POINTS = {
 
 # Tier Thresholds
 TIERS = {
-    "OBSERVER": {"min": 0, "max": 49, "role_name": "Q1 — Observer", "emoji": "🟤"},
+    "OBSERVER": {"min": 0, "max": 49, "role_name": "Q1 — Challenger", "emoji": "🟤"},
     "BUILDER": {"min": 50, "max": 149, "role_name": "Q1 — Builder", "emoji": "🟢"},
     "OPERATOR": {"min": 150, "max": 299, "role_name": "Q1 — Operator", "emoji": "🔵"},
     "ELITE": {

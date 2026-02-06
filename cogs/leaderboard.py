@@ -37,9 +37,16 @@ class Leaderboard(commands.Cog):
             posts_today = await ValuePostModel.get_user_posts_today(message.author.id)
 
             if posts_today >= MAX_VALUE_POSTS_PER_DAY:
-                # Delete the message and notify user
+                # Delete the message
                 await message.delete()
 
+                # Send visible notification in the channel (will auto-delete)
+                warning_msg = await message.channel.send(
+                    f"⚠️ {message.author.mention} You've reached the maximum of **{MAX_VALUE_POSTS_PER_DAY} value posts per day**. "
+                    f"Your message was removed. Please try again tomorrow!"
+                )
+
+                # Also try to DM them
                 try:
                     await message.author.send(
                         f"⚠️ You've reached the maximum of {MAX_VALUE_POSTS_PER_DAY} value posts per day.\n\n"
@@ -47,11 +54,14 @@ class Leaderboard(commands.Cog):
                         f"Please try again tomorrow!"
                     )
                 except:
-                    pass
+                    pass  # If DM fails, at least they saw the channel message
 
                 logger.info(
                     f"⚠️ Blocked {message.author.name} from posting (daily limit reached)"
                 )
+
+                # Delete warning message after 10 seconds to keep channel clean
+                await warning_msg.delete(delay=10)
                 return
 
             # Ensure user exists

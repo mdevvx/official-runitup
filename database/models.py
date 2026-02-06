@@ -83,12 +83,15 @@ class UserModel:
                 f"✅ Updated points for user {user_id}: {points_change:+d} ({reason})"
             )
 
-            # Update Discord roles immediately if tier changed
-            if old_tier != new_tier and bot:
+            # ALWAYS update Discord roles after points change (to ensure sync)
+            if bot:
                 await UserModel.update_user_role(user_id, new_tier, bot)
-                logger.info(
-                    f"🎖️ Updated role for user {user_id}: {old_tier} → {new_tier}"
-                )
+                if old_tier != new_tier:
+                    logger.info(
+                        f"🎖️ Tier changed for user {user_id}: {old_tier} → {new_tier}"
+                    )
+                else:
+                    logger.debug(f"🎖️ Verified role for user {user_id}: {new_tier}")
 
             updated_user = response.data[0]
             updated_user["mention"] = f"<@{user_id}>"
@@ -96,6 +99,19 @@ class UserModel:
 
         except Exception as e:
             logger.error(f"❌ Error updating points for user {user_id}: {e}")
+            # Don't raise - we want points to update even if role update fails
+            # Just return the updated user data
+            try:
+                supabase = get_supabase()
+                response = (
+                    supabase.table("users").select("*").eq("user_id", user_id).execute()
+                )
+                if response.data:
+                    user_data = response.data[0]
+                    user_data["mention"] = f"<@{user_id}>"
+                    return user_data
+            except:
+                pass
             raise
 
     @staticmethod
@@ -134,26 +150,40 @@ class UserModel:
                 logger.warning(f"⚠️ Role for tier {new_tier} not found")
                 return
 
-            # Check if member already has the correct role
-            if new_tier_role in member.roles:
-                logger.debug(f"✅ User {user_id} already has correct role")
-                return
+            # Check current state
+            has_correct_role = new_tier_role in member.roles
 
-            # Remove all other tier roles
+            # Find any incorrect tier roles they have
             roles_to_remove = [
                 role
                 for tier, role in tier_roles.items()
                 if tier != new_tier and role in member.roles
             ]
 
-            # Update roles
-            if roles_to_remove:
-                await member.remove_roles(*roles_to_remove, reason="Tier changed")
-                logger.info(f"🗑️ Removed old tier roles from {member.name}")
+            # Only make changes if needed
+            if not has_correct_role or roles_to_remove:
+                # Remove incorrect tier roles
+                if roles_to_remove:
+                    await member.remove_roles(
+                        *roles_to_remove, reason="Tier update - removing old tiers"
+                    )
+                    logger.info(
+                        f"🗑️ Removed {len(roles_to_remove)} old tier role(s) from {member.name}"
+                    )
 
-            await member.add_roles(new_tier_role, reason="Tier changed")
-            logger.info(f"✅ Added {new_tier_role.name} to {member.name}")
+                # Add correct tier role if missing
+                if not has_correct_role:
+                    await member.add_roles(
+                        new_tier_role, reason="Tier update - adding correct tier"
+                    )
+                    logger.info(f"✅ Added {new_tier_role.name} to {member.name}")
+            else:
+                logger.debug(
+                    f"✅ User {member.name} already has correct role: {new_tier_role.name}"
+                )
 
+        except discord.Forbidden:
+            logger.error(f"❌ Bot lacks permissions to update roles for user {user_id}")
         except Exception as e:
             logger.error(f"❌ Error updating role for user {user_id}: {e}")
             # Don't raise - role update failure shouldn't break points update
