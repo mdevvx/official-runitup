@@ -58,7 +58,7 @@ class Members(commands.Cog):
         except Exception as e:
             logger.error(f"❌ Error tracking activity for {message.author.name}: {e}")
 
-    @app_commands.command(name="points", description="Check your points and stats")
+    @app_commands.command(name="q1points", description="Check your points and stats")
     async def points(self, interaction: discord.Interaction):
         """Check user's points"""
         try:
@@ -98,7 +98,9 @@ class Members(commands.Cog):
                 "❌ An error occurred while fetching your points.", ephemeral=True
             )
 
-    @app_commands.command(name="leaderboard", description="View the top 10 leaderboard")
+    @app_commands.command(
+        name="q1leaderboard", description="View the top 10 leaderboard"
+    )
     async def leaderboard(
         self, interaction: discord.Interaction, limit: Optional[int] = 10
     ):
@@ -127,7 +129,7 @@ class Members(commands.Cog):
             )
 
     @app_commands.command(
-        name="mytier", description="Check your current tier and progress"
+        name="q1mytier", description="Check your current tier and progress"
     )
     async def mytier(self, interaction: discord.Interaction):
         """Show user's tier and progress"""

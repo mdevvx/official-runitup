@@ -37,7 +37,9 @@ class Admin(commands.Cog):
             return False
         return True
 
-    @app_commands.command(name="addpoints", description="[ADMIN] Add points to a user")
+    @app_commands.command(
+        name="q1addpoints", description="[ADMIN] Add points to a user"
+    )
     @app_commands.describe(
         user="The user to add points to",
         points="Number of points to add",
@@ -90,7 +92,7 @@ class Admin(commands.Cog):
             )
 
     @app_commands.command(
-        name="removepoints", description="[ADMIN] Remove points from a user"
+        name="q1removepoints", description="[ADMIN] Remove points from a user"
     )
     @app_commands.describe(
         user="The user to remove points from",
@@ -152,7 +154,7 @@ class Admin(commands.Cog):
             )
 
     @app_commands.command(
-        name="viewuser", description="[ADMIN] View detailed user stats"
+        name="q1viewuser", description="[ADMIN] View detailed user stats"
     )
     @app_commands.describe(user="The user to view")
     async def view_user(self, interaction: discord.Interaction, user: discord.Member):
