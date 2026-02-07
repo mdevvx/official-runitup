@@ -90,7 +90,7 @@ class Members(commands.Cog):
                     inline=True,
                 )
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed)
 
         except Exception as e:
             logger.error(f"❌ Error in points command: {e}")
@@ -177,7 +177,7 @@ class Members(commands.Cog):
 
             embed.set_footer(text=f"Current Points: {points}")
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed)
 
         except Exception as e:
             logger.error(f"❌ Error in mytier command: {e}")
