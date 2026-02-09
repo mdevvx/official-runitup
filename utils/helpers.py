@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 import discord
 from config.settings import CHALLENGE_START_DATE, CHALLENGE_END_DATE
+from config.constants import BRAND_COLOR
 
 
 def is_challenge_active() -> bool:
@@ -60,9 +61,7 @@ def get_tier_role_mention(tier: str, guild: discord.Guild = None) -> str:
 
 async def send_error_embed(interaction: discord.Interaction, message: str):
     """Send error embed"""
-    embed = discord.Embed(
-        title="❌ Error", description=message, color=discord.Color.red()
-    )
+    embed = discord.Embed(title="❌ Error", description=message, color=BRAND_COLOR)
 
     if interaction.response.is_done():
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -72,9 +71,7 @@ async def send_error_embed(interaction: discord.Interaction, message: str):
 
 async def send_success_embed(interaction: discord.Interaction, message: str):
     """Send success embed"""
-    embed = discord.Embed(
-        title="✅ Success", description=message, color=discord.Color.green()
-    )
+    embed = discord.Embed(title="✅ Success", description=message, color=BRAND_COLOR)
 
     if interaction.response.is_done():
         await interaction.followup.send(embed=embed, ephemeral=True)

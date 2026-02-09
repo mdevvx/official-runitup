@@ -1,7 +1,8 @@
 import discord
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
-from config.constants import TIERS
+from config.constants import TIERS, BRAND_COLOR
+from config.settings import LEADERBOARD_IMAGE_URL
 from utils.helpers import get_tier_emoji
 
 
@@ -12,8 +13,8 @@ def create_leaderboard_embed(
     embed = discord.Embed(
         title=title,
         description="Top performers in the RunItUp Q1 Challenge",
-        color=discord.Color.gold(),
-        # timestamp=datetime.utcnow(),
+        color=BRAND_COLOR,
+        timestamp=datetime.now(timezone.utc),
     )
 
     if not users:
@@ -38,6 +39,8 @@ def create_leaderboard_embed(
         leaderboard_text += f"    └ {user['total_points']} points\n\n"
 
     embed.description = leaderboard_text
+    # Add leaderboard image
+    embed.set_image(url=LEADERBOARD_IMAGE_URL)
     embed.set_footer(text="RunItUp Q1 Challenge • Updated")
 
     return embed
@@ -61,8 +64,8 @@ def create_user_stats_embed(
     embed = discord.Embed(
         title=f"{tier_emoji} {display_name}'s Stats",
         description=f"Stats for {user_mention}",
-        color=discord.Color.blue(),
-        timestamp=datetime.utcnow(),
+        color=BRAND_COLOR,
+        timestamp=datetime.now(timezone.utc),
     )
 
     embed.add_field(
@@ -111,7 +114,7 @@ def create_rank_embed(
     embed = discord.Embed(
         title=f"📊 Rank for {display_name}",
         description=f"Ranking details for {user_mention}",
-        color=discord.Color.blue(),
+        color=BRAND_COLOR,
     )
 
     embed.add_field(
@@ -137,8 +140,8 @@ def create_submission_embed(
     """Create submission review embed"""
     embed = discord.Embed(
         title=f"🔥 New {submission['submission_type'].title()} Submission",
-        color=discord.Color.orange(),
-        timestamp=datetime.utcnow(),
+        color=BRAND_COLOR,
+        timestamp=datetime.now(timezone.utc),
     )
 
     embed.add_field(name="User", value=user.mention, inline=True)

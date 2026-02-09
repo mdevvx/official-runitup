@@ -74,3 +74,21 @@ CREATE INDEX IF NOT EXISTS idx_value_posts_user_date ON value_posts(user_id, pos
 CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_submissions_user ON submissions(user_id);
 CREATE INDEX IF NOT EXISTS idx_points_history_user ON points_history(user_id);
+
+-- Daily Todos Table
+-- Add this to your Supabase database
+CREATE TABLE IF NOT EXISTS daily_todos (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+    message_id BIGINT UNIQUE NOT NULL,
+    channel_id BIGINT NOT NULL,
+    post_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_daily_todos_user_date ON daily_todos(user_id, post_date);
+CREATE INDEX IF NOT EXISTS idx_daily_todos_message ON daily_todos(message_id);
+
+-- Comment
+COMMENT ON TABLE daily_todos IS 'Tracks daily todo posts - users can post 1 todo per day for 1 point';

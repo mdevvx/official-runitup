@@ -11,6 +11,7 @@ from utils.embeds import (
     create_leaderboard_embed,
 )
 from utils.helpers import is_challenge_active
+from config.constants import BRAND_COLOR
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,7 @@ class Members(commands.Cog):
     async def points(self, interaction: discord.Interaction):
         """Check user's points"""
         try:
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.defer()
 
             # Get or create user
             user_data = await UserModel.get_or_create(
@@ -134,7 +135,7 @@ class Members(commands.Cog):
     async def mytier(self, interaction: discord.Interaction):
         """Show user's tier and progress"""
         try:
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.defer()
 
             from config.constants import TIERS
             from utils.helpers import get_tier_emoji
@@ -151,7 +152,7 @@ class Members(commands.Cog):
             embed = discord.Embed(
                 title=f"{get_tier_emoji(current_tier)} Your Tier Progress",
                 description=f"Tier progress for {interaction.user.mention}",
-                color=discord.Color.blue(),
+                color=BRAND_COLOR,
             )
 
             # Show all tiers with progress
