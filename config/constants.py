@@ -1,6 +1,7 @@
 # # Point Values
 # POINTS = {
 #     "DAILY_ACTIVITY": 1,
+#     "DAILY_TODO": 1,  # New: 1 point for posting daily todo
 #     "REACTION": 0.25,
 #     "FIRE_EMOJI": 3,
 #     "GEM_EMOJI": 3,
@@ -59,12 +60,15 @@
 # # Limits - These values can be overridden by settings.py
 # MAX_VALUE_POSTS_PER_DAY = 2
 # MAX_POINTS_PER_POST = 30
+# MAX_TODO_POSTS_PER_DAY = 1  # New: 1 daily todo post per day
 
+# BRAND_COLOR = 0x719DCB
 
 # Point Values
 POINTS = {
     "DAILY_ACTIVITY": 1,
     "DAILY_TODO": 1,  # New: 1 point for posting daily todo
+    "CALLS_POST": 1,  # New: 1 point for posting in calls channel
     "REACTION": 0.25,
     "FIRE_EMOJI": 3,
     "GEM_EMOJI": 3,

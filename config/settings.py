@@ -22,6 +22,9 @@
 # SUBMISSIONS_CHANNEL_ID = int(os.getenv("SUBMISSIONS_CHANNEL_ID"))
 # ANNOUNCEMENTS_CHANNEL_ID = int(os.getenv("ANNOUNCEMENTS_CHANNEL_ID"))
 
+# # Optional Logging Channel - set to None if not provided
+# LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0)) or None
+
 # # Challenge Settings
 # CHALLENGE_START_DATE = datetime.strptime(os.getenv("CHALLENGE_START_DATE"), "%Y-%m-%d")
 # CHALLENGE_END_DATE = datetime.strptime(os.getenv("CHALLENGE_END_DATE"), "%Y-%m-%d")
@@ -51,7 +54,6 @@
 # if not all(required_vars):
 #     raise ValueError("Missing required environment variables. Check .env file.")
 
-
 import os
 from dotenv import load_dotenv
 from datetime import datetime
@@ -73,6 +75,7 @@ LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID"))
 WINS_CHANNEL_ID = int(os.getenv("WINS_CHANNEL_ID"))
 VALUE_DROPS_CHANNEL_ID = int(os.getenv("VALUE_DROPS_CHANNEL_ID"))
 DAILY_TODO_CHANNEL_ID = int(os.getenv("DAILY_TODO_CHANNEL_ID"))
+CALLS_CHANNEL_ID = int(os.getenv("CALLS_CHANNEL_ID"))
 SUBMISSIONS_CHANNEL_ID = int(os.getenv("SUBMISSIONS_CHANNEL_ID"))
 ANNOUNCEMENTS_CHANNEL_ID = int(os.getenv("ANNOUNCEMENTS_CHANNEL_ID"))
 
