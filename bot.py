@@ -43,6 +43,7 @@ class RunItUpBot(commands.Bot):
             "cogs.admin",
             "cogs.leaderboard",
             "cogs.tasks",
+            "cogs.wins_relay",
         ]
 
     async def setup_hook(self):

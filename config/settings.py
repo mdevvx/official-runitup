@@ -108,5 +108,9 @@ LEADERBOARD_IMAGE_URL = os.getenv(
     "https://your-image-url-here.com/leaderboard.png",  # Replace with your actual image URL
 )
 
+DIALED_GUILD_ID = int(os.getenv("DIALED_GUILD_ID"))
+DIALED_WINS_CHANNEL_ID = int(os.getenv("DIALED_WINS_CHANNEL_ID"))
+RUNITUP_WINS_CHANNEL_ID = int(os.getenv("RUNITUP_WINS_CHANNEL_ID"))
+
 if not all(required_vars):
     raise ValueError("Missing required environment variables. Check .env file.")
