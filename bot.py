@@ -86,7 +86,8 @@ class RunItUpBot(commands.Bot):
         # Set bot status
         await self.change_presence(
             activity=discord.Activity(
-                type=discord.ActivityType.watching, name="RunItUp Q1 Challenge 🔥"
+                type=discord.ActivityType.watching,
+                name="⚠️ (Ended) RunItUp Q1 Challenge",
             )
         )
 
