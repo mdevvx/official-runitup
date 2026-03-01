@@ -119,7 +119,7 @@ class WinsRelay(commands.Cog):
 
             # React to the original message to confirm relay
             try:
-                await message.add_reaction("✅")
+                await message.add_reaction("🏆")
             except discord.Forbidden:
                 pass  # Bot may lack reaction perms in Dialed — not critical
 
