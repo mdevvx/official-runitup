@@ -61,8 +61,7 @@ class WinsRelay(commands.Cog):
             # Build the relay embed
             embed = discord.Embed(
                 description=message.content or "",
-                color=BRAND_COLOR,  # gold
-                timestamp=message.created_at,
+                color=BRAND_COLOR,
             )
 
             # embed.set_author(
@@ -78,7 +77,7 @@ class WinsRelay(commands.Cog):
             #     text=f"🔗 Dialed Win  •  #{message.channel.name}",
             # )
             embed.set_author(
-                name=f"{message.author.display_name} (@{message.author.name}) • from Dialed",
+                name=f"{message.author.display_name} (@{message.author.name})",
                 icon_url=(
                     message.author.display_avatar.url
                     if message.author.display_avatar
@@ -87,7 +86,7 @@ class WinsRelay(commands.Cog):
             )
 
             embed.set_footer(
-                text=f"🔗 Dialed Win  •  #{message.channel.name}  •  @{message.author.name}",
+                text=f"🔗 Dialed Win  •  #{message.channel.name}",
             )
 
             # Attach the first image inline if present
