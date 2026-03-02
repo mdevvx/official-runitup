@@ -39,6 +39,10 @@ class WinsRelay(commands.Cog):
         if message.channel.id != DIALED_WINS_CHANNEL_ID:
             return
 
+        # Only relay direct messages, not replies
+        if message.reference is not None:
+            return
+
         await self._relay_win(message)
 
     async def _relay_win(self, message: discord.Message):
@@ -61,8 +65,20 @@ class WinsRelay(commands.Cog):
                 timestamp=message.created_at,
             )
 
+            # embed.set_author(
+            #     name=f"{message.author.display_name} • from Dialed",
+            #     icon_url=(
+            #         message.author.display_avatar.url
+            #         if message.author.display_avatar
+            #         else None
+            #     ),
+            # )
+
+            # embed.set_footer(
+            #     text=f"🔗 Dialed Win  •  #{message.channel.name}",
+            # )
             embed.set_author(
-                name=f"{message.author.display_name} • from Dialed",
+                name=f"{message.author.display_name} (@{message.author.name}) • from Dialed",
                 icon_url=(
                     message.author.display_avatar.url
                     if message.author.display_avatar
@@ -71,7 +87,7 @@ class WinsRelay(commands.Cog):
             )
 
             embed.set_footer(
-                text=f"🔗 Dialed Win  •  #{message.channel.name}",
+                text=f"🔗 Dialed Win  •  #{message.channel.name}  •  @{message.author.name}",
             )
 
             # Attach the first image inline if present
