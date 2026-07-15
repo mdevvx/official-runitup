@@ -32,7 +32,7 @@ class RunItUpBot(commands.Bot):
         intents.reactions = True
 
         super().__init__(
-            command_prefix="!",  # Prefix for text commands (not used much)
+            command_prefix="$",  # Prefix for text commands (not used much)
             intents=intents,
             help_command=None,
         )

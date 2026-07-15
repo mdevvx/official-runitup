@@ -37,6 +37,29 @@ class Admin(commands.Cog):
             return False
         return True
 
+    @commands.command(name="sync")
+    @commands.has_permissions(administrator=True)
+    async def sync(self, ctx: commands.Context):
+        """[ADMIN] Register/sync all slash commands to this server"""
+        try:
+            self.bot.tree.copy_global_to(guild=ctx.guild)
+            synced = await self.bot.tree.sync(guild=ctx.guild)
+            logger.info(
+                f"✅ {ctx.author.name} synced {len(synced)} commands to guild {ctx.guild.id}"
+            )
+            await ctx.send(f"✅ Synced {len(synced)} command(s) to **{ctx.guild.name}**.")
+        except Exception as e:
+            logger.error(f"❌ Error in sync command: {e}")
+            await ctx.send("❌ An error occurred while syncing commands.")
+
+    @sync.error
+    async def sync_error(self, ctx: commands.Context, error: commands.CommandError):
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("❌ You don't have permission to use this command.")
+        else:
+            logger.error(f"❌ Error in sync command: {error}")
+            await ctx.send("❌ An error occurred while syncing commands.")
+
     @app_commands.command(
         name="q1addpoints", description="[ADMIN] Add points to a user"
     )
