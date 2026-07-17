@@ -39,7 +39,6 @@ class RunItUpBot(commands.Bot):
 
         self.initial_extensions = [
             "cogs.members",
-            "cogs.submissions",
             "cogs.admin",
             "cogs.leaderboard",
             "cogs.tasks",
@@ -48,47 +47,53 @@ class RunItUpBot(commands.Bot):
 
     async def setup_hook(self):
         """Setup hook called when bot is starting"""
-        logger.info("🔧 Running setup hook...")
-
         # Initialize Supabase
         try:
             supabase_client.initialize()
-            logger.info("✅ Supabase client initialized")
+            logger.info("Supabase client initialized")
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Supabase: {e}")
+            logger.error(f"Failed to initialize Supabase: {e}")
             sys.exit(1)
 
-        # Load cogs
+        # Load DB-backed config (channel IDs, value-drop emoji points, scaler threshold)
+        from database.bot_config import BotConfigModel
+
+        await BotConfigModel.load_cache()
+
+        # Load cogs (importing cogs.admin/cogs.members attaches their
+        # subcommands to the shared season_group as a side effect)
         for extension in self.initial_extensions:
             try:
                 await self.load_extension(extension)
-                logger.info(f"✅ Loaded extension: {extension}")
+                logger.info(f"Loaded extension: {extension}")
             except Exception as e:
-                logger.error(f"❌ Failed to load extension {extension}: {e}")
+                logger.error(f"Failed to load extension {extension}: {e}")
+
+        # Register the grouped /<season> command now that every subcommand has
+        # been attached to it by the cogs loaded above
+        from cogs.season_group import season_group
+
+        self.tree.add_command(season_group)
 
         # Sync commands to guild for faster updates during development
         try:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
-            logger.info(f"✅ Commands synced to guild {GUILD_ID}")
+            logger.info(f"Commands synced to guild {GUILD_ID}")
         except Exception as e:
-            logger.error(f"❌ Failed to sync commands: {e}")
+            logger.error(f"Failed to sync commands: {e}")
 
     async def on_ready(self):
         """Called when bot is ready"""
-        logger.info("=" * 50)
-        logger.info(f"✅ Bot is ready!")
-        logger.info(f"📛 Logged in as: {self.user.name} ({self.user.id})")
-        logger.info(f"🔗 Connected to {len(self.guilds)} guild(s)")
-        logger.info(f"👥 Serving {len(self.users)} users")
-        logger.info("=" * 50)
+        logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        logger.info(f"Connected to {len(self.guilds)} server(s)")
 
         # Set bot status
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="⚠️ (Ended) RunItUp Q1 Challenge",
+                name="RunItUp Q2 Challenge",
             )
         )
 
@@ -97,13 +102,13 @@ class RunItUpBot(commands.Bot):
         if isinstance(error, commands.CommandNotFound):
             return
 
-        logger.error(f"❌ Command error: {error}")
+        logger.error(f"Command error: {error}")
 
     async def on_application_command_error(
         self, interaction: discord.Interaction, error
     ):
         """Global slash command error handler"""
-        logger.error(f"❌ Slash command error: {error}")
+        logger.error(f"Slash command error: {error}")
 
         try:
             if interaction.response.is_done():
@@ -125,19 +130,21 @@ async def main():
     bot = RunItUpBot()
 
     try:
-        logger.info("🚀 Starting RunItUp Challenge Bot...")
+        logger.info("=" * 50)
+        logger.info("RUNITUP BOT - STARTING")
+        logger.info("=" * 50)
         await bot.start(DISCORD_TOKEN)
     except KeyboardInterrupt:
-        logger.info("⚠️ Received keyboard interrupt, shutting down...")
+        logger.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
     finally:
         await bot.close()
-        logger.info("👋 Bot shut down successfully")
+        logger.info("Bot shut down successfully")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("👋 Goodbye!")
+        logger.info("Goodbye!")

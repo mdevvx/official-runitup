@@ -3,9 +3,10 @@ from discord.ext import commands, tasks
 from datetime import datetime, time
 
 from database.models import UserModel
+from database.bot_config import BotConfigModel
 from utils.logger import get_logger
 from utils.embeds import create_leaderboard_embed
-from config.settings import LEADERBOARD_CHANNEL_ID, GUILD_ID
+from config.settings import GUILD_ID
 from config.constants import TIERS
 
 logger = get_logger(__name__)
@@ -19,16 +20,13 @@ class Tasks(commands.Cog):
         self.update_leaderboard_task.start()
         self.update_tier_roles_task.start()
         self.backup_data_task.start()
+        logger.info("Tasks cog loaded")
 
     def cog_unload(self):
         """Stop tasks when cog is unloaded"""
         self.update_leaderboard_task.cancel()
         self.update_tier_roles_task.cancel()
         self.backup_data_task.cancel()
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        logger.info("✅ Tasks cog loaded")
 
     @tasks.loop(hours=6)
     async def update_leaderboard_task(self):
@@ -43,7 +41,12 @@ class Tasks(commands.Cog):
             embed = create_leaderboard_embed(users)
 
             # Get leaderboard channel
-            leaderboard_channel = self.bot.get_channel(LEADERBOARD_CHANNEL_ID)
+            leaderboard_channel_id = BotConfigModel.get_channel_id("leaderboard")
+            leaderboard_channel = (
+                self.bot.get_channel(leaderboard_channel_id)
+                if leaderboard_channel_id
+                else None
+            )
 
             if not leaderboard_channel:
                 logger.error("❌ Leaderboard channel not found")

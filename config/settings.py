@@ -1,6 +1,5 @@
 import os
 from dotenv import load_dotenv
-from datetime import datetime
 
 load_dotenv()
 
@@ -14,21 +13,28 @@ MOD_ROLE_ID = int(os.getenv("MOD_ROLE_ID"))
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Channel IDs
-LEADERBOARD_CHANNEL_ID = int(os.getenv("LEADERBOARD_CHANNEL_ID"))
-WINS_CHANNEL_ID = int(os.getenv("WINS_CHANNEL_ID"))
-VALUE_DROPS_CHANNEL_ID = int(os.getenv("VALUE_DROPS_CHANNEL_ID"))
-DAILY_TODO_CHANNEL_ID = int(os.getenv("DAILY_TODO_CHANNEL_ID"))
-CALLS_CHANNEL_ID = int(os.getenv("CALLS_CHANNEL_ID"))
-SUBMISSIONS_CHANNEL_ID = int(os.getenv("SUBMISSIONS_CHANNEL_ID"))
-ANNOUNCEMENTS_CHANNEL_ID = int(os.getenv("ANNOUNCEMENTS_CHANNEL_ID"))
+# Channel IDs - all optional legacy fallbacks now. The real source of truth is
+# /<season>setchannel (see database.bot_config.BotConfigModel.get_channel_id),
+# which falls back to these only if a channel type has never been registered
+# via that command. None of these being unset will crash startup.
+def _optional_channel_id(env_var: str):
+    raw = os.getenv(env_var)
+    return int(raw) if raw else None
 
-# Optional Logging Channel - set to None if not provided
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", 0)) or None
+
+LEADERBOARD_CHANNEL_ID = _optional_channel_id("LEADERBOARD_CHANNEL_ID")
+WINS_CHANNEL_ID = _optional_channel_id("WINS_CHANNEL_ID")
+VALUE_DROPS_CHANNEL_ID = _optional_channel_id("VALUE_DROPS_CHANNEL_ID")
+DAILY_TODO_CHANNEL_ID = _optional_channel_id("DAILY_TODO_CHANNEL_ID")
+CALLS_CHANNEL_ID = _optional_channel_id("CALLS_CHANNEL_ID")
+ANNOUNCEMENTS_CHANNEL_ID = _optional_channel_id("ANNOUNCEMENTS_CHANNEL_ID")
+LOG_CHANNEL_ID = _optional_channel_id("LOG_CHANNEL_ID")
 
 # Challenge Settings
-CHALLENGE_START_DATE = datetime.strptime(os.getenv("CHALLENGE_START_DATE"), "%Y-%m-%d")
-CHALLENGE_END_DATE = datetime.strptime(os.getenv("CHALLENGE_END_DATE"), "%Y-%m-%d")
+# Dates are command-only now (/<season> setchallengedates - see
+# database.bot_config.BotConfigModel), never read from .env. No hardcoded
+# fallback here on purpose - it was causing stale expired dates to silently
+# take over whenever the command hadn't been run yet.
 PRIZE_AMOUNT = int(os.getenv("PRIZE_AMOUNT", 1000))
 
 # Point Limits

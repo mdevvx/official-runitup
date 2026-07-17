@@ -18,10 +18,7 @@ class WinsRelay(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        logger.info("✅ WinsRelay cog loaded")
+        logger.info("WinsRelay cog loaded")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):

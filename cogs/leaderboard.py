@@ -1,15 +1,12 @@
 import discord
 from discord.ext import commands
+from datetime import datetime
 from typing import Optional
 
 from database.models import ValuePostModel, UserModel, DailyTodoModel, CallsPostModel
+from database.bot_config import BotConfigModel
 from utils.logger import get_logger
 from utils.helpers import is_challenge_active
-from config.settings import (
-    VALUE_DROPS_CHANNEL_ID,
-    DAILY_TODO_CHANNEL_ID,
-    CALLS_CHANNEL_ID,
-)
 from config.constants import POINTS, MAX_VALUE_POSTS_PER_DAY, MAX_TODO_POSTS_PER_DAY
 
 logger = get_logger(__name__)
@@ -20,11 +17,7 @@ class Leaderboard(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.tracked_emojis = ["🔥", "💎", "💯"]
         self.success_emoji = "✅"
-
-    @commands.Cog.listener()
-    async def on_ready(self):
         logger.info("Leaderboard cog loaded")
 
     @commands.Cog.listener()
@@ -33,15 +26,15 @@ class Leaderboard(commands.Cog):
         if message.author.bot:
             return
 
-        if message.channel.id == VALUE_DROPS_CHANNEL_ID:
+        if message.channel.id == BotConfigModel.get_channel_id("value_drops"):
             await self._handle_value_drop(message)
             return
 
-        if message.channel.id == DAILY_TODO_CHANNEL_ID:
+        if message.channel.id == BotConfigModel.get_channel_id("daily_todo"):
             await self._handle_daily_todo(message)
             return
 
-        if message.channel.id == CALLS_CHANNEL_ID:
+        if message.channel.id == BotConfigModel.get_channel_id("calls"):
             await self._handle_calls_post(message)
             return
 
@@ -50,12 +43,11 @@ class Leaderboard(commands.Cog):
     ):
         """Send violation to Discord logging channel"""
         try:
-            from config.settings import LOG_CHANNEL_ID
-
-            if not LOG_CHANNEL_ID:
+            log_channel_id = BotConfigModel.get_channel_id("log")
+            if not log_channel_id:
                 return
 
-            log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+            log_channel = self.bot.get_channel(log_channel_id)
             if not log_channel:
                 return
 
@@ -86,12 +78,11 @@ class Leaderboard(commands.Cog):
     ):
         """Send post creation to Discord logging channel"""
         try:
-            from config.settings import LOG_CHANNEL_ID
-
-            if not LOG_CHANNEL_ID:
+            log_channel_id = BotConfigModel.get_channel_id("log")
+            if not log_channel_id:
                 return
 
-            log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+            log_channel = self.bot.get_channel(log_channel_id)
             if not log_channel:
                 return
 
@@ -115,12 +106,11 @@ class Leaderboard(commands.Cog):
     ):
         """Send post deletion to Discord logging channel"""
         try:
-            from config.settings import LOG_CHANNEL_ID
-
-            if not LOG_CHANNEL_ID:
+            log_channel_id = BotConfigModel.get_channel_id("log")
+            if not log_channel_id:
                 return
 
-            log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+            log_channel = self.bot.get_channel(log_channel_id)
             if not log_channel:
                 return
 
@@ -308,11 +298,13 @@ class Leaderboard(commands.Cog):
     ):
         """Process reaction changes"""
         try:
+            tracked_emojis = BotConfigModel.get_value_drop_emojis().keys()
+
             emoji_str = str(payload.emoji)
-            if emoji_str not in self.tracked_emojis:
+            if emoji_str not in tracked_emojis:
                 return
 
-            if payload.channel_id != VALUE_DROPS_CHANNEL_ID:
+            if payload.channel_id != BotConfigModel.get_channel_id("value_drops"):
                 return
 
             channel = self.bot.get_channel(payload.channel_id)
@@ -323,26 +315,19 @@ class Leaderboard(commands.Cog):
             if message.author.bot:
                 return
 
-            fire_count = 0
-            gem_count = 0
-            hundred_count = 0
-
-            for reaction in message.reactions:
-                emoji = str(reaction.emoji)
-                if emoji == "🔥":
-                    fire_count = reaction.count
-                elif emoji == "💎":
-                    gem_count = reaction.count
-                elif emoji == "💯":
-                    hundred_count = reaction.count
+            reaction_counts = {
+                str(reaction.emoji): reaction.count
+                for reaction in message.reactions
+                if str(reaction.emoji) in tracked_emojis
+            }
 
             logger.debug(
                 f"REACTION {action.upper()} | Message: {message.id} | Emoji: {emoji_str} | "
-                f"Current: Fire:{fire_count} Gem:{gem_count} 100:{hundred_count}"
+                f"Current: {reaction_counts}"
             )
 
             await ValuePostModel.update_reactions(
-                message.id, fire_count, gem_count, hundred_count, bot=self.bot
+                message.id, reaction_counts, bot=self.bot
             )
 
         except discord.NotFound:
@@ -459,14 +444,13 @@ class Leaderboard(commands.Cog):
 
     @commands.Cog.listener()
     async def on_guild_channel_pins_update(
-        self, channel: discord.TextChannel, last_pin: Optional[discord.datetime]
+        self, channel: discord.TextChannel, last_pin: Optional[datetime]
     ):
-        if channel.id != VALUE_DROPS_CHANNEL_ID:
+        if channel.id != BotConfigModel.get_channel_id("value_drops"):
             return
 
         try:
             from database.supabase_client import get_supabase
-            from config.settings import LOG_CHANNEL_ID
 
             pinned_messages = await channel.pins()
             pinned_ids = [msg.id for msg in pinned_messages]
@@ -508,8 +492,9 @@ class Leaderboard(commands.Cog):
                         f"Points Change: {points_change:+d}"
                     )
 
-                    if LOG_CHANNEL_ID:
-                        log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+                    log_channel_id = BotConfigModel.get_channel_id("log")
+                    if log_channel_id:
+                        log_channel = self.bot.get_channel(log_channel_id)
                         if log_channel:
                             embed = discord.Embed(
                                 title=f"Post {'Pinned' if is_pinned else 'Unpinned'}",

@@ -1,14 +1,52 @@
 from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 import discord
-from config.settings import CHALLENGE_START_DATE, CHALLENGE_END_DATE
 from config.constants import BRAND_COLOR
 
 
+def _resolve_challenge_window():
+    """Returns (start, end, now) as tz-aware datetimes from the DB-backed
+    window set via /<season> setchallengedates, or None if never configured.
+    No .env fallback - dates are command-only, never hardcoded."""
+    from database.bot_config import BotConfigModel
+
+    window = BotConfigModel.get_challenge_window()
+    if not window:
+        return None
+
+    start_raw, end_raw, timezone_name = window
+    tz = ZoneInfo(timezone_name)
+    start = datetime.strptime(start_raw, "%Y-%m-%d").replace(tzinfo=tz)
+    end = datetime.strptime(end_raw, "%Y-%m-%d").replace(
+        hour=23, minute=59, second=59, tzinfo=tz
+    )
+    return start, end, datetime.now(tz)
+
+
 def is_challenge_active() -> bool:
-    """Check if challenge is currently active"""
-    now = datetime.now()
-    return CHALLENGE_START_DATE <= now <= CHALLENGE_END_DATE
+    """Check if challenge is currently active, per the window set via
+    /<season> setchallengedates."""
+    window = _resolve_challenge_window()
+    if not window:
+        return False
+    start, end, now = window
+    return start <= now <= end
+
+
+def challenge_status() -> str:
+    """Returns 'not_started', 'active', or 'ended' - lets commands (e.g. the
+    leaderboard) show a helpful message instead of stale/empty data. No dates
+    configured at all is treated the same as 'not started yet'."""
+    window = _resolve_challenge_window()
+    if not window:
+        return "not_started"
+    start, end, now = window
+    if now < start:
+        return "not_started"
+    if now > end:
+        return "ended"
+    return "active"
 
 
 def format_points(points: int) -> str:

@@ -1,9 +1,11 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import Optional
+from datetime import datetime
+from typing import Literal, Optional
 
-from database.models import UserModel, SubmissionModel
+from database.models import UserModel
+from database.bot_config import BotConfigModel, VALID_CHANNEL_TYPES
 from utils.logger import get_logger
 from utils.helpers import (
     has_admin_role,
@@ -11,36 +13,51 @@ from utils.helpers import (
     send_success_embed,
     format_points,
     get_tier_role_mention,
+    challenge_status,
 )
-from utils.embeds import create_leaderboard_embed
-from config.settings import LEADERBOARD_CHANNEL_ID
+from config.constants import (
+    BRAND_COLOR,
+    MASTER_BONUS_MULTIPLIER,
+    MASTER_ROLE_NAME,
+    SCALER_ROLE_NAME,
+    CURRENT_SEASON,
+    TIERS,
+    POINTS,
+)
+from config.settings import MAX_REFERRALS
+from cogs.season_group import season_group
 
 logger = get_logger(__name__)
 
 
+async def _require_admin(interaction: discord.Interaction) -> bool:
+    """Returns True if allowed; sends the denial message and returns False
+    otherwise. These commands live on a shared Group rather than as methods of
+    the Admin cog, so there's no cog-level interaction_check to rely on."""
+    if not await has_admin_role(interaction):
+        await send_error_embed(
+            interaction, "❌ You don't have permission to use admin commands."
+        )
+        return False
+    return True
+
+
 class Admin(commands.Cog):
-    """Admin commands for managing the challenge"""
+    """Admin prefix commands (slash commands for this cog live under season_group)"""
 
     def __init__(self, bot):
         self.bot = bot
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        logger.info("✅ Admin cog loaded")
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Check if user has admin permissions"""
-        if not await has_admin_role(interaction):
-            await send_error_embed(
-                interaction, "❌ You don't have permission to use admin commands."
-            )
-            return False
-        return True
+        logger.info("Admin cog loaded")
 
     @commands.command(name="sync")
     @commands.has_permissions(administrator=True)
     async def sync(self, ctx: commands.Context):
         """[ADMIN] Register/sync all slash commands to this server"""
+        try:
+            await ctx.message.add_reaction("⏳")
+        except discord.HTTPException:
+            pass
+
         try:
             self.bot.tree.copy_global_to(guild=ctx.guild)
             synced = await self.bot.tree.sync(guild=ctx.guild)
@@ -48,9 +65,22 @@ class Admin(commands.Cog):
                 f"✅ {ctx.author.name} synced {len(synced)} commands to guild {ctx.guild.id}"
             )
             await ctx.send(f"✅ Synced {len(synced)} command(s) to **{ctx.guild.name}**.")
+            await self._swap_reaction(ctx, "⏳", "✅")
         except Exception as e:
             logger.error(f"❌ Error in sync command: {e}")
             await ctx.send("❌ An error occurred while syncing commands.")
+            await self._swap_reaction(ctx, "⏳", "❌")
+
+    async def _swap_reaction(self, ctx: commands.Context, old: str, new: str):
+        """Remove the bot's own `old` reaction and add `new` - best-effort, never fails the command"""
+        try:
+            await ctx.message.remove_reaction(old, self.bot.user)
+        except discord.HTTPException:
+            pass
+        try:
+            await ctx.message.add_reaction(new)
+        except discord.HTTPException:
+            pass
 
     @sync.error
     async def sync_error(self, ctx: commands.Context, error: commands.CommandError):
@@ -60,195 +90,598 @@ class Admin(commands.Cog):
             logger.error(f"❌ Error in sync command: {error}")
             await ctx.send("❌ An error occurred while syncing commands.")
 
-    @app_commands.command(
-        name="q1addpoints", description="[ADMIN] Add points to a user"
-    )
-    @app_commands.describe(
-        user="The user to add points to",
-        points="Number of points to add",
-        reason="Reason for adding points",
-    )
-    async def add_points(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        points: int,
-        reason: str,
-    ):
-        """Add points to a user"""
-        try:
-            await interaction.response.defer(ephemeral=True)
 
-            if points <= 0:
-                await send_error_embed(interaction, "❌ Points must be greater than 0.")
-                return
+# ----------------------------------------------------------------------
+# Points administration
+# ----------------------------------------------------------------------
 
-            # Ensure user exists
-            await UserModel.get_or_create(user.id, user.name)
 
-            # Add points with bot instance for immediate role update
-            updated_user = await UserModel.update_points(
-                user.id, points, reason, bot=self.bot
-            )
+@season_group.command(name="addpoints", description="[ADMIN] Add points to a user")
+@app_commands.describe(
+    user="The user to add points to",
+    points="Number of points to add",
+    reason="Reason for adding points",
+    is_win="Mark this as a win award (applies the Masters +15% bonus if the user has it)",
+)
+async def add_points(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    points: int,
+    reason: str,
+    is_win: Optional[bool] = False,
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
 
-            # Get tier role mention
-            tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
+        if points <= 0:
+            await send_error_embed(interaction, "❌ Points must be greater than 0.")
+            return
 
-            # Log action
-            logger.info(
-                f"✅ {interaction.user.name} added {points} points to {user.name}: {reason}"
-            )
+        user_data = await UserModel.get_or_create(user.id, user.name)
 
-            await send_success_embed(
+        awarded_points = points
+        bonus_applied = False
+        if is_win and user_data.get("is_master"):
+            awarded_points = round(points * MASTER_BONUS_MULTIPLIER)
+            bonus_applied = True
+
+        updated_user = await UserModel.update_points(
+            user.id, awarded_points, reason, bot=interaction.client
+        )
+
+        tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
+
+        logger.info(
+            f"✅ {interaction.user.name} added {awarded_points} points to {user.name}: {reason}"
+            f"{' (master bonus applied)' if bonus_applied else ''}"
+        )
+
+        bonus_note = (
+            f"\n🥋 **Masters bonus applied:** {points} → {awarded_points}"
+            if bonus_applied
+            else ""
+        )
+
+        await send_success_embed(
+            interaction,
+            f"✅ Added **{format_points(awarded_points)}** points to {user.mention}{bonus_note}\n\n"
+            f"**Reason:** {reason}\n"
+            f"**New Total:** {updated_user['total_points']} points\n"
+            f"**Tier:** {tier_role}\n"
+            f"🎖️ Discord role updated automatically!",
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in add_points command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while adding points.")
+
+
+@season_group.command(
+    name="removepoints", description="[ADMIN] Remove points from a user"
+)
+@app_commands.describe(
+    user="The user to remove points from",
+    points="Number of points to remove",
+    reason="Reason for removing points",
+)
+async def remove_points(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    points: int,
+    reason: str,
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        if points <= 0:
+            await send_error_embed(interaction, "❌ Points must be greater than 0.")
+            return
+
+        user_data = await UserModel.get_or_create(user.id, user.name)
+
+        if user_data["total_points"] < points:
+            await send_error_embed(
                 interaction,
-                f"✅ Added **{format_points(points)}** points to {user.mention}\n\n"
-                f"**Reason:** {reason}\n"
-                f"**New Total:** {updated_user['total_points']} points\n"
-                f"**Tier:** {tier_role}\n"
-                f"🎖️ Discord role updated automatically!",
+                f"❌ {user.mention} only has {user_data['total_points']} points. Cannot remove {points}.",
             )
+            return
 
-        except Exception as e:
-            logger.error(f"❌ Error in add_points command: {e}")
+        updated_user = await UserModel.update_points(
+            user.id, -points, reason, bot=interaction.client
+        )
+
+        tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
+
+        logger.info(
+            f"✅ {interaction.user.name} removed {points} points from {user.name}: {reason}"
+        )
+
+        await send_success_embed(
+            interaction,
+            f"✅ Removed **{points}** points from {user.mention}\n\n"
+            f"**Reason:** {reason}\n"
+            f"**New Total:** {updated_user['total_points']} points\n"
+            f"**Tier:** {tier_role}\n"
+            f"🎖️ Discord role updated automatically!",
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in remove_points command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while removing points."
+        )
+
+
+@season_group.command(
+    name="addreferral",
+    description="[ADMIN] Award referral points (Whop +10 each, Discord +5 each, capped)",
+)
+@app_commands.describe(
+    user="The user to credit",
+    referral_type="Whop or Discord referral",
+    count="How many referrals to add",
+)
+async def add_referral(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    referral_type: Literal["whop", "discord"],
+    count: int,
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        if count <= 0:
+            await send_error_embed(interaction, "❌ Count must be greater than 0.")
+            return
+
+        user_data = await UserModel.get_or_create(user.id, user.name)
+        current_count = user_data.get("referral_count", 0)
+
+        remaining = MAX_REFERRALS - current_count
+        if remaining <= 0:
             await send_error_embed(
-                interaction, "❌ An error occurred while adding points."
-            )
-
-    @app_commands.command(
-        name="q1removepoints", description="[ADMIN] Remove points from a user"
-    )
-    @app_commands.describe(
-        user="The user to remove points from",
-        points="Number of points to remove",
-        reason="Reason for removing points",
-    )
-    async def remove_points(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        points: int,
-        reason: str,
-    ):
-        """Remove points from a user"""
-        try:
-            await interaction.response.defer(ephemeral=True)
-
-            if points <= 0:
-                await send_error_embed(interaction, "❌ Points must be greater than 0.")
-                return
-
-            # Ensure user exists
-            user_data = await UserModel.get_or_create(user.id, user.name)
-
-            # Check if user has enough points
-            if user_data["total_points"] < points:
-                await send_error_embed(
-                    interaction,
-                    f"❌ {user.mention} only has {user_data['total_points']} points. Cannot remove {points}.",
-                )
-                return
-
-            # Remove points (negative value) with bot instance for immediate role update
-            updated_user = await UserModel.update_points(
-                user.id, -points, reason, bot=self.bot
-            )
-
-            # Get tier role mention
-            tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
-
-            # Log action
-            logger.info(
-                f"✅ {interaction.user.name} removed {points} points from {user.name}: {reason}"
-            )
-
-            await send_success_embed(
                 interaction,
-                f"✅ Removed **{points}** points from {user.mention}\n\n"
-                f"**Reason:** {reason}\n"
-                f"**New Total:** {updated_user['total_points']} points\n"
-                f"**Tier:** {tier_role}\n"
-                f"🎖️ Discord role updated automatically!",
+                f"❌ {user.mention} has already reached the max of {MAX_REFERRALS} referrals.",
+            )
+            return
+
+        awarded_count = min(count, remaining)
+        points_per_referral = (
+            POINTS["WHOP_REFERRAL"] if referral_type == "whop" else POINTS["DISCORD_REFERRAL"]
+        )
+        total_points = awarded_count * points_per_referral
+
+        updated_user = await UserModel.add_referrals(
+            user.id,
+            awarded_count,
+            total_points,
+            f"{referral_type.title()} referral x{awarded_count}",
+            bot=interaction.client,
+        )
+
+        logger.info(
+            f"✅ {interaction.user.name} added {awarded_count} {referral_type} referrals "
+            f"(+{total_points} points) to {user.name}"
+        )
+
+        capped_note = (
+            f"\n⚠️ Capped at {MAX_REFERRALS} total — only {awarded_count} of {count} counted."
+            if awarded_count < count
+            else ""
+        )
+
+        await send_success_embed(
+            interaction,
+            f"✅ Added **{awarded_count}** {referral_type.title()} referral(s) "
+            f"(+{total_points} points) to {user.mention}{capped_note}\n"
+            f"**Total referrals:** {updated_user['referral_count']}/{MAX_REFERRALS}",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in add_referral command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while adding referrals."
+        )
+
+
+@season_group.command(name="viewuser", description="[ADMIN] View detailed user stats")
+@app_commands.describe(user="The user to view")
+async def view_user(interaction: discord.Interaction, user: discord.Member):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        from database.supabase_client import get_supabase
+        from utils.embeds import create_user_stats_embed
+        from config.constants import CURRENT_SEASON
+
+        user_data = await UserModel.get_or_create(user.id, user.name)
+        embed = create_user_stats_embed(
+            user_data, discord_user=user, guild=interaction.guild
+        )
+
+        supabase = get_supabase()
+        history_response = (
+            supabase.table("points_history")
+            .select("*")
+            .eq("user_id", user.id)
+            .eq("season", CURRENT_SEASON)
+            .order("created_at", desc=True)
+            .limit(5)
+            .execute()
+        )
+
+        if history_response.data:
+            history_text = ""
+            for entry in history_response.data:
+                points = format_points(entry["points_change"])
+                history_text += f"{points} - {entry['reason']}\n"
+
+            embed.add_field(
+                name="📜 Recent Points History",
+                value=history_text[:1024],
+                inline=False,
             )
 
-        except Exception as e:
-            logger.error(f"❌ Error in remove_points command: {e}")
-            await send_error_embed(
-                interaction, "❌ An error occurred while removing points."
-            )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(
-        name="q1viewuser", description="[ADMIN] View detailed user stats"
-    )
-    @app_commands.describe(user="The user to view")
-    async def view_user(self, interaction: discord.Interaction, user: discord.Member):
-        """View detailed user information"""
+    except Exception as e:
+        logger.error(f"❌ Error in view_user command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while viewing user stats."
+        )
+
+
+# ----------------------------------------------------------------------
+# Channel configuration
+# ----------------------------------------------------------------------
+
+
+@season_group.command(
+    name="setchannel", description="[ADMIN] Register a channel for the bot to use"
+)
+@app_commands.describe(
+    channel_type="Which channel role this is for",
+    channel="The channel to register",
+)
+async def set_channel(
+    interaction: discord.Interaction,
+    channel_type: Literal[tuple(VALID_CHANNEL_TYPES)],
+    channel: discord.TextChannel,
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        await BotConfigModel.set_channel_id(
+            channel_type, channel.id, updated_by=interaction.user.id
+        )
+
+        logger.info(
+            f"✅ {interaction.user.name} set channel.{channel_type} = "
+            f"#{channel.name} ({channel.id})"
+        )
+
+        await send_success_embed(
+            interaction, f"✅ **{channel_type}** channel set to {channel.mention}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_channel command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while setting the channel."
+        )
+
+
+@season_group.command(
+    name="listchannels", description="[ADMIN] Show currently configured channels"
+)
+async def list_channels(interaction: discord.Interaction):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        lines = []
+        for channel_type in VALID_CHANNEL_TYPES:
+            channel_id = BotConfigModel.get_channel_id(channel_type)
+            mention = f"<#{channel_id}>" if channel_id else "*not set*"
+            lines.append(f"**{channel_type}**: {mention}")
+
+        embed = discord.Embed(
+            title="📋 Configured Channels",
+            description="\n".join(lines),
+            color=BRAND_COLOR,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.error(f"❌ Error in list_channels command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while listing channels."
+        )
+
+
+# ----------------------------------------------------------------------
+# Tier point thresholds
+# ----------------------------------------------------------------------
+
+_TIER_DISPLAY_TO_KEY = {
+    "Challenger": "OBSERVER",
+    "Builder": "BUILDER",
+    "Operator": "OPERATOR",
+    "Elite": "ELITE",
+}
+
+
+@season_group.command(
+    name="settierpoints",
+    description="[ADMIN] Set the minimum points required for a tier role",
+)
+@app_commands.describe(tier="Which tier role", min_points="Minimum points required")
+async def set_tier_points(
+    interaction: discord.Interaction,
+    tier: Literal["Challenger", "Builder", "Operator", "Elite"],
+    min_points: int,
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        if min_points < 0:
+            await send_error_embed(interaction, "❌ Points must be 0 or greater.")
+            return
+
+        tier_key = _TIER_DISPLAY_TO_KEY[tier]
+        await BotConfigModel.set_tier_threshold(
+            tier_key, min_points, updated_by=interaction.user.id
+        )
+
+        logger.info(
+            f"✅ {interaction.user.name} set {tier} tier threshold to {min_points} points"
+        )
+
+        await send_success_embed(
+            interaction, f"✅ **{tier}** now requires **{min_points}+** points."
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_tier_points command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while setting tier points."
+        )
+
+
+# ----------------------------------------------------------------------
+# Masters bonus role + role binding (Masters/Scalers -> actual Discord role)
+# ----------------------------------------------------------------------
+
+
+@season_group.command(
+    name="setmaster",
+    description="[ADMIN] Grant or revoke the Masters bonus role (Whop masterclass buyers)",
+)
+@app_commands.describe(user="The user to update", enabled="True to grant, False to revoke")
+async def set_master(interaction: discord.Interaction, user: discord.Member, enabled: bool):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        await UserModel.get_or_create(user.id, user.name)
+        await UserModel.set_master(user.id, enabled, bot=interaction.client)
+
+        logger.info(
+            f"✅ {interaction.user.name} set Masters role for {user.name} to {enabled}"
+        )
+
+        action = "granted to" if enabled else "revoked from"
+        bonus_pct = int(round((MASTER_BONUS_MULTIPLIER - 1) * 100))
+        await send_success_embed(
+            interaction,
+            f"✅ Masters bonus (+{bonus_pct}% on wins & value drops) {action} {user.mention}",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_master command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while updating Masters status."
+        )
+
+
+@season_group.command(
+    name="setrole",
+    description="[ADMIN] Set which Discord role to use for Masters or Scalers",
+)
+@app_commands.describe(
+    role_type="Which role this is for", role="The Discord role to bind"
+)
+async def set_role(
+    interaction: discord.Interaction,
+    role_type: Literal["masters", "scalers"],
+    role: discord.Role,
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        await BotConfigModel.set_role_id(
+            role_type, role.id, updated_by=interaction.user.id
+        )
+
+        logger.info(
+            f"✅ {interaction.user.name} bound role_type '{role_type}' to "
+            f"role {role.name} ({role.id})"
+        )
+
+        await send_success_embed(
+            interaction, f"✅ **{role_type}** role set to {role.mention}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_role command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while setting the role.")
+
+
+# ----------------------------------------------------------------------
+# Challenge window (start/end date + timezone)
+# ----------------------------------------------------------------------
+
+
+@season_group.command(
+    name="setchallengedates",
+    description="[ADMIN] Set the challenge start/end dates and timezone",
+)
+@app_commands.describe(
+    start_date="Start date (YYYY-MM-DD)",
+    end_date="End date (YYYY-MM-DD)",
+    timezone="Timezone the dates are in",
+)
+async def set_challenge_dates(
+    interaction: discord.Interaction,
+    start_date: str,
+    end_date: str,
+    timezone: Literal[
+        "US/Eastern", "US/Central", "US/Mountain", "US/Pacific", "UTC"
+    ] = "US/Eastern",
+):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
         try:
-            await interaction.response.defer(ephemeral=True)
+            datetime.strptime(start_date, "%Y-%m-%d")
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            await send_error_embed(interaction, "❌ Dates must be in YYYY-MM-DD format.")
+            return
 
-            from database.supabase_client import get_supabase
-            from utils.embeds import create_user_stats_embed
+        await BotConfigModel.set_challenge_dates(
+            start_date, end_date, timezone, updated_by=interaction.user.id
+        )
 
-            # Get user data
-            user_data = await UserModel.get_or_create(user.id, user.name)
+        logger.info(
+            f"✅ {interaction.user.name} set challenge dates: "
+            f"{start_date} -> {end_date} ({timezone})"
+        )
 
-            # Create base embed with user mention
-            embed = create_user_stats_embed(user_data, discord_user=user)
+        await send_success_embed(
+            interaction,
+            f"✅ Challenge window set: **{start_date}** to **{end_date}** ({timezone})",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_challenge_dates command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while setting challenge dates."
+        )
 
-            # Get recent points history
-            supabase = get_supabase()
-            history_response = (
-                supabase.table("points_history")
-                .select("*")
-                .eq("user_id", user.id)
-                .order("created_at", desc=True)
-                .limit(5)
-                .execute()
+
+# ----------------------------------------------------------------------
+# Full configuration overview
+# ----------------------------------------------------------------------
+
+
+@season_group.command(
+    name="config",
+    description="[ADMIN] Show all current configuration - channels, roles, dates, tiers",
+)
+async def show_config(interaction: discord.Interaction):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        embed = discord.Embed(
+            title=f"⚙️ {CURRENT_SEASON} Configuration", color=BRAND_COLOR
+        )
+
+        # Channels
+        channel_lines = [
+            f"**{channel_type}**: "
+            + (
+                f"<#{BotConfigModel.get_channel_id(channel_type)}>"
+                if BotConfigModel.get_channel_id(channel_type)
+                else "*not set*"
             )
+            for channel_type in VALID_CHANNEL_TYPES
+        ]
+        embed.add_field(name="📋 Channels", value="\n".join(channel_lines), inline=False)
 
-            if history_response.data:
-                history_text = ""
-                for entry in history_response.data:
-                    points = format_points(entry["points_change"])
-                    history_text += f"{points} - {entry['reason']}\n"
+        # Challenge window - no start date set is just treated as "not started yet"
+        status_labels = {
+            "not_started": "🔜 Not started yet",
+            "active": "✅ Active",
+            "ended": "🏁 Ended",
+        }
+        window = BotConfigModel.get_challenge_window()
+        status = challenge_status()
+        if window:
+            start_raw, end_raw, timezone_name = window
+            window_text = f"{start_raw} → {end_raw} ({timezone_name})\n{status_labels[status]}"
+        else:
+            window_text = f"No dates set yet (`/{CURRENT_SEASON.lower()} setchallengedates`)\n{status_labels[status]}"
+        embed.add_field(name="📅 Challenge Window", value=window_text, inline=False)
 
-                embed.add_field(
-                    name="📜 Recent Points History",
-                    value=history_text[:1024],
-                    inline=False,
-                )
-
-            # Get submission stats
-            submissions_response = (
-                supabase.table("submissions")
-                .select("status", count="exact")
-                .eq("user_id", user.id)
-                .execute()
+        # Tier thresholds - resolve the actual bound Discord role, not just the name
+        thresholds = BotConfigModel.get_tier_thresholds()
+        tier_lines = []
+        for tier_name, tier_data in TIERS.items():
+            min_points = thresholds.get(tier_name, tier_data["min"])
+            role = (
+                discord.utils.get(interaction.guild.roles, name=tier_data["role_name"])
+                if interaction.guild
+                else None
             )
-
-            if submissions_response.count:
-                pending = len(
-                    [s for s in submissions_response.data if s["status"] == "pending"]
-                )
-                approved = len(
-                    [s for s in submissions_response.data if s["status"] == "approved"]
-                )
-                rejected = len(
-                    [s for s in submissions_response.data if s["status"] == "rejected"]
-                )
-
-                embed.add_field(
-                    name="📋 Submissions",
-                    value=f"✅ Approved: {approved}\n⏳ Pending: {pending}\n❌ Rejected: {rejected}",
-                    inline=True,
-                )
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"❌ Error in view_user command: {e}")
-            await send_error_embed(
-                interaction, "❌ An error occurred while viewing user stats."
+            role_display = (
+                role.mention
+                if role
+                else f"⚠️ *\"{tier_data['role_name']}\" not created in this server yet*"
             )
+            tier_lines.append(f"{tier_data['emoji']} {role_display}: {min_points}+ points")
+        embed.add_field(name="🎖️ Tiers", value="\n".join(tier_lines), inline=False)
+
+        # Masters / Scalers - resolve the actual bound Discord role
+        role_lines = []
+        for role_type, fallback_name in (
+            ("masters", MASTER_ROLE_NAME),
+            ("scalers", SCALER_ROLE_NAME),
+        ):
+            role_id = BotConfigModel.get_role_id(role_type)
+            role = None
+            bound_explicitly = False
+
+            if role_id and interaction.guild:
+                role = interaction.guild.get_role(role_id)
+                bound_explicitly = True
+            elif interaction.guild:
+                role = discord.utils.get(interaction.guild.roles, name=fallback_name)
+
+            if role:
+                note = "" if bound_explicitly else " *(matched by name, not explicitly bound)*"
+                role_lines.append(f"**{role_type}**: {role.mention}{note}")
+            elif role_id:
+                role_lines.append(
+                    f"**{role_type}**: ⚠️ *bound role ID no longer exists in this server*"
+                )
+            else:
+                role_lines.append(
+                    f"**{role_type}**: ⚠️ *not found - run `/{CURRENT_SEASON.lower()} setrole` "
+                    f"or create a role named \"{fallback_name}\"*"
+                )
+        embed.add_field(name="🥋 Special Roles", value="\n".join(role_lines), inline=False)
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except Exception as e:
+        logger.error(f"❌ Error in show_config command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while showing configuration."
+        )
 
 
 async def setup(bot):

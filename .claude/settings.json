@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(cd \"d:/Muhammad Nadeem/Mdev/Client Bots/RunItUp Bot\" && echo \"--- .env.example ---\" && cat .env.example && echo \"--- .env \\(redacted values\\) ---\" && sed -E 's/=.*/=<redacted>/' .env 2>/dev/null || powershell -c \"\\(Get-Content .env\\) -replace '=.*','=<redacted>'\")",
-      "Bash(python -m py_compile cogs/admin.py bot.py)"
+      "Bash(python -m py_compile cogs/admin.py bot.py)",
+      "Bash(python -c 'import ast,glob *)",
+      "Bash(python -c \"import discord\")",
+      "Bash(python -c ' *)",
+      "Bash(pip list *)"
     ]
   }
 }

@@ -2,7 +2,7 @@ from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 from database.supabase_client import get_supabase
 from utils.logger import get_logger
-from config.constants import TIERS
+from config.constants import TIERS, CURRENT_SEASON, SCALER_ROLE_NAME, MASTER_ROLE_NAME
 
 logger = get_logger(__name__)
 
@@ -360,11 +360,19 @@ class UserModel:
 
     @staticmethod
     def calculate_tier(points: int) -> str:
-        """Calculate tier based on points"""
-        for tier_name, tier_data in TIERS.items():
-            if tier_data["min"] <= points <= tier_data["max"]:
-                return tier_name
-        return "OBSERVER"
+        """Calculate tier based on points, using thresholds overridable via
+        /<season> settierpoints (falls back to config.constants.TIERS defaults)"""
+        from database.bot_config import BotConfigModel
+
+        thresholds = BotConfigModel.get_tier_thresholds()
+
+        current_tier = "OBSERVER"
+        current_min = -1
+        for tier_name, min_points in thresholds.items():
+            if points >= min_points and min_points > current_min:
+                current_tier = tier_name
+                current_min = min_points
+        return current_tier
 
     @staticmethod
     async def get_by_id(user_id: int) -> Optional[Dict[str, Any]]:
@@ -385,12 +393,14 @@ class UserModel:
 
     @staticmethod
     async def get_leaderboard(limit: int = 10) -> List[Dict[str, Any]]:
-        """Get top users by points"""
+        """Get top users by points - only users who have actually earned points,
+        so a freshly-reset season doesn't list everyone tied at 0"""
         try:
             supabase = get_supabase()
             response = (
                 supabase.table("users")
                 .select("*")
+                .gt("total_points", 0)
                 .order("total_points", desc=True)
                 .limit(limit)
                 .execute()
@@ -404,8 +414,37 @@ class UserModel:
             raise
 
     @staticmethod
-    async def set_scaler(user_id: int, is_scaler: bool = True) -> Dict[str, Any]:
-        """Set user as scaler"""
+    async def add_referrals(
+        user_id: int, count: int, points: int, reason: str, bot=None
+    ) -> Dict[str, Any]:
+        """Increment referral_count and award the corresponding points in one call"""
+        try:
+            supabase = get_supabase()
+
+            user = await UserModel.get_by_id(user_id)
+            new_referral_count = user.get("referral_count", 0) + count
+
+            supabase.table("users").update(
+                {
+                    "referral_count": new_referral_count,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            ).eq("user_id", user_id).execute()
+
+            logger.info(
+                f"REFERRALS ADDED | User: {user_id} | +{count} | New Total: {new_referral_count}"
+            )
+
+            updated_user = await UserModel.update_points(user_id, points, reason, bot=bot)
+            updated_user["referral_count"] = new_referral_count
+            return updated_user
+        except Exception as e:
+            logger.error(f"ERROR | add_referrals | User: {user_id} | {e}")
+            raise
+
+    @staticmethod
+    async def set_scaler(user_id: int, is_scaler: bool = True, bot=None) -> Dict[str, Any]:
+        """Set user as scaler, optionally syncing the Discord Scaler role (grants #scalers access)"""
         try:
             supabase = get_supabase()
             response = (
@@ -421,12 +460,97 @@ class UserModel:
             )
 
             logger.info(f"SCALER STATUS SET | User: {user_id} | Is Scaler: {is_scaler}")
+
+            if bot:
+                await UserModel._sync_role_by_type(bot, user_id, "scalers", is_scaler)
+
             user_data = response.data[0]
             user_data["mention"] = f"<@{user_id}>"
             return user_data
         except Exception as e:
             logger.error(f"ERROR | set_scaler | User: {user_id} | {e}")
             raise
+
+    @staticmethod
+    async def set_master(user_id: int, is_master: bool = True, bot=None) -> Dict[str, Any]:
+        """Set the Masters bonus flag (Whop masterclass purchase - not season/points based),
+        optionally syncing the Discord Masters role. Grants +15% points on wins/value-drops."""
+        try:
+            supabase = get_supabase()
+            response = (
+                supabase.table("users")
+                .update(
+                    {
+                        "is_master": is_master,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                )
+                .eq("user_id", user_id)
+                .execute()
+            )
+
+            logger.info(f"MASTER STATUS SET | User: {user_id} | Is Master: {is_master}")
+
+            if bot:
+                await UserModel._sync_role_by_type(bot, user_id, "masters", is_master)
+
+            user_data = response.data[0]
+            user_data["mention"] = f"<@{user_id}>"
+            return user_data
+        except Exception as e:
+            logger.error(f"ERROR | set_master | User: {user_id} | {e}")
+            raise
+
+    @staticmethod
+    async def _sync_role_by_type(bot, user_id: int, role_type: str, should_have: bool):
+        """Add or remove a single Discord role by role_type ('masters'/'scalers') -
+        roles that live outside the tier system, so they're managed independently.
+        Resolves the actual role via BotConfigModel.get_role_id (set with
+        /<season> setrole) if configured, otherwise falls back to the hardcoded
+        MASTER_ROLE_NAME/SCALER_ROLE_NAME lookup by name."""
+        try:
+            from config.settings import GUILD_ID
+            from database.bot_config import BotConfigModel
+            import discord
+
+            guild = bot.get_guild(GUILD_ID)
+            if not guild:
+                return
+
+            member = guild.get_member(user_id)
+            if not member:
+                return
+
+            role_id = BotConfigModel.get_role_id(role_type)
+            if role_id:
+                role = guild.get_role(role_id)
+            else:
+                fallback_names = {
+                    "masters": MASTER_ROLE_NAME,
+                    "scalers": SCALER_ROLE_NAME,
+                }
+                role = discord.utils.get(
+                    guild.roles, name=fallback_names.get(role_type, role_type)
+                )
+
+            if not role:
+                logger.warning(
+                    f"ROLE SYNC SKIPPED | role_type '{role_type}' not configured/found | "
+                    f"User: {user_id}"
+                )
+                return
+
+            has_role = role in member.roles
+            if should_have and not has_role:
+                await member.add_roles(role, reason=f"{role_type} unlocked")
+                logger.info(f"ROLE ADDED | User: {user_id} | Role: {role.name}")
+            elif not should_have and has_role:
+                await member.remove_roles(role, reason=f"{role_type} revoked")
+                logger.info(f"ROLE REMOVED | User: {user_id} | Role: {role.name}")
+        except Exception as e:
+            logger.error(
+                f"ERROR | _sync_role_by_type | role_type: {role_type} | User: {user_id} | {e}"
+            )
 
 
 class DailyActivityModel:
@@ -556,9 +680,8 @@ class ValuePostModel:
                 "message_id": message_id,
                 "channel_id": channel_id,
                 "post_date": post_date.isoformat(),
-                "fire_count": 0,
-                "gem_count": 0,
-                "hundred_count": 0,
+                "season": CURRENT_SEASON,
+                "reaction_counts": {},
                 "is_pinned": False,
                 "total_points": 0,
             }
@@ -573,23 +696,17 @@ class ValuePostModel:
 
     @staticmethod
     async def update_reactions(
-        message_id: int, fire: int, gem: int, hundred: int, bot=None
+        message_id: int, reaction_counts: Dict[str, int], bot=None
     ) -> Dict[str, Any]:
-        """Update reaction counts and recalculate points"""
+        """Recalculate points from the admin-configured emoji->points map
+        (see BotConfigModel.get_value_drop_emojis), applying the Masters +15%
+        bonus if the post author has purchased the masterclass."""
         try:
-            from config.constants import POINTS, MAX_POINTS_PER_POST
+            from config.constants import MAX_POINTS_PER_POST, MASTER_BONUS_MULTIPLIER
+            from database.bot_config import BotConfigModel
 
             supabase = get_supabase()
-
-            # Calculate points
-            points = (
-                (fire * POINTS["FIRE_EMOJI"])
-                + (gem * POINTS["GEM_EMOJI"])
-                + (hundred * POINTS["HUNDRED_EMOJI"])
-            )
-
-            # Cap points
-            points = min(points, MAX_POINTS_PER_POST)
+            emoji_points = BotConfigModel.get_value_drop_emojis()
 
             # Get current post
             current_response = (
@@ -603,6 +720,21 @@ class ValuePostModel:
                 return None
 
             current_post = current_response.data[0]
+
+            raw_points = sum(
+                count * emoji_points.get(emoji, 0)
+                for emoji, count in reaction_counts.items()
+            )
+            capped_points = min(raw_points, MAX_POINTS_PER_POST)
+
+            author = await UserModel.get_by_id(current_post["user_id"])
+            is_master = bool(author and author.get("is_master"))
+            points = (
+                round(capped_points * MASTER_BONUS_MULTIPLIER)
+                if is_master
+                else capped_points
+            )
+
             old_points = current_post["total_points"]
             points_diff = points - old_points
 
@@ -611,9 +743,7 @@ class ValuePostModel:
                 supabase.table("value_posts")
                 .update(
                     {
-                        "fire_count": fire,
-                        "gem_count": gem,
-                        "hundred_count": hundred,
+                        "reaction_counts": reaction_counts,
                         "total_points": points,
                         "updated_at": datetime.utcnow().isoformat(),
                     }
@@ -624,8 +754,8 @@ class ValuePostModel:
 
             # Log reaction update
             logger.info(
-                f"REACTIONS UPDATED | Message: {message_id} | "
-                f"Fire:{fire} Gem:{gem} 100:{hundred} | Points: {old_points}->{points}"
+                f"REACTIONS UPDATED | Message: {message_id} | Counts: {reaction_counts} | "
+                f"Points: {old_points}->{points}{' (master bonus)' if is_master else ''}"
             )
 
             # Update user points if changed
@@ -645,7 +775,7 @@ class ValuePostModel:
 
     @staticmethod
     async def get_user_posts_today(user_id: int) -> int:
-        """Get count of user's posts today"""
+        """Get count of user's posts today, in the current season"""
         try:
             supabase = get_supabase()
             today = date.today().isoformat()
@@ -655,6 +785,7 @@ class ValuePostModel:
                 .select("id", count="exact")
                 .eq("user_id", user_id)
                 .eq("post_date", today)
+                .eq("season", CURRENT_SEASON)
                 .execute()
             )
 
@@ -662,137 +793,6 @@ class ValuePostModel:
 
         except Exception as e:
             logger.error(f"ERROR | get_user_posts_today | User: {user_id} | {e}")
-            raise
-
-
-class SubmissionModel:
-    @staticmethod
-    async def create(
-        user_id: int,
-        submission_type: str,
-        description: str = None,
-        proof_url: str = None,
-        amount: float = None,
-        referral_type: str = None,
-    ) -> Dict[str, Any]:
-        """Create new submission"""
-        try:
-            supabase = get_supabase()
-
-            new_submission = {
-                "user_id": user_id,
-                "submission_type": submission_type,
-                "status": "pending",
-                "description": description,
-                "proof_url": proof_url,
-                "amount": amount,
-                "referral_type": referral_type,
-            }
-
-            response = supabase.table("submissions").insert(new_submission).execute()
-            logger.info(
-                f"SUBMISSION CREATED | User: {user_id} | Type: {submission_type}"
-            )
-            return response.data[0]
-
-        except Exception as e:
-            logger.error(f"ERROR | create_submission | User: {user_id} | {e}")
-            raise
-
-    @staticmethod
-    async def approve(
-        submission_id: int, reviewed_by: int, points: int, bot=None
-    ) -> Dict[str, Any]:
-        """Approve submission and award points"""
-        try:
-            supabase = get_supabase()
-
-            # Get submission
-            response = (
-                supabase.table("submissions")
-                .select("*")
-                .eq("id", submission_id)
-                .execute()
-            )
-
-            if not response.data:
-                raise ValueError(f"Submission {submission_id} not found")
-
-            submission = response.data[0]
-
-            # Update submission
-            updated = (
-                supabase.table("submissions")
-                .update(
-                    {
-                        "status": "approved",
-                        "points_awarded": points,
-                        "reviewed_by": reviewed_by,
-                        "reviewed_at": datetime.utcnow().isoformat(),
-                    }
-                )
-                .eq("id", submission_id)
-                .execute()
-            )
-
-            # Award points to user
-            await UserModel.update_points(
-                submission["user_id"],
-                points,
-                f"{submission['submission_type']} approved",
-                bot=bot,
-            )
-
-            logger.info(
-                f"SUBMISSION APPROVED | ID: {submission_id} | Points: +{points}"
-            )
-            return updated.data[0]
-
-        except Exception as e:
-            logger.error(f"ERROR | approve_submission | ID: {submission_id} | {e}")
-            raise
-
-    @staticmethod
-    async def reject(submission_id: int, reviewed_by: int) -> Dict[str, Any]:
-        """Reject submission"""
-        try:
-            supabase = get_supabase()
-
-            response = (
-                supabase.table("submissions")
-                .update(
-                    {
-                        "status": "rejected",
-                        "reviewed_by": reviewed_by,
-                        "reviewed_at": datetime.utcnow().isoformat(),
-                    }
-                )
-                .eq("id", submission_id)
-                .execute()
-            )
-
-            logger.info(f"SUBMISSION REJECTED | ID: {submission_id}")
-            return response.data[0]
-
-        except Exception as e:
-            logger.error(f"ERROR | reject_submission | ID: {submission_id} | {e}")
-            raise
-
-    @staticmethod
-    async def get_pending() -> List[Dict[str, Any]]:
-        """Get all pending submissions"""
-        try:
-            supabase = get_supabase()
-            response = (
-                supabase.table("submissions")
-                .select("*")
-                .eq("status", "pending")
-                .order("created_at", desc=False)
-                .execute()
-            )
-            return response.data
-        except Exception as e:
-            logger.error(f"ERROR | get_pending_submissions | {e}")
             raise
 
 
@@ -809,6 +809,7 @@ class DailyTodoModel:
                 "message_id": message_id,
                 "channel_id": channel_id,
                 "post_date": post_date.isoformat(),
+                "season": CURRENT_SEASON,
             }
 
             response = supabase.table("daily_todos").insert(new_post).execute()
@@ -821,7 +822,7 @@ class DailyTodoModel:
 
     @staticmethod
     async def get_user_posts_today(user_id: int) -> int:
-        """Get count of user's todo posts today"""
+        """Get count of user's todo posts today, in the current season"""
         try:
             supabase = get_supabase()
             today = date.today().isoformat()
@@ -831,6 +832,7 @@ class DailyTodoModel:
                 .select("id", count="exact")
                 .eq("user_id", user_id)
                 .eq("post_date", today)
+                .eq("season", CURRENT_SEASON)
                 .execute()
             )
 
@@ -856,6 +858,7 @@ class CallsPostModel:
                 "message_id": message_id,
                 "channel_id": channel_id,
                 "post_date": post_date.isoformat(),
+                "season": CURRENT_SEASON,
             }
 
             response = supabase.table("calls_posts").insert(new_post).execute()
