@@ -31,7 +31,10 @@
       "Bash(python \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Muhammad-Nadeem-Mdev-Client-Bots-RunItUp-Bot\\\\09174fd0-9746-41e5-946d-e7f817754a5d\\\\scratchpad\\\\count_msg3.py\")",
       "Bash(python -m py_compile utils/embeds.py)",
       "Bash(python -m py_compile cogs/season_group.py cogs/admin.py cogs/members.py cogs/tasks.py bot.py)",
-      "Bash(python -m py_compile utils/embeds.py database/bot_config.py database/models.py cogs/admin.py cogs/members.py cogs/tasks.py cogs/season_group.py bot.py)"
+      "Bash(python -m py_compile utils/embeds.py database/bot_config.py database/models.py cogs/admin.py cogs/members.py cogs/tasks.py cogs/season_group.py bot.py)",
+      "Bash(python -m py_compile config/constants.py database/bot_config.py database/models.py utils/helpers.py utils/embeds.py cogs/admin.py cogs/members.py cogs/tasks.py cogs/leaderboard.py cogs/season_group.py cogs/wins_relay.py bot.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Read(//tmp/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\claude\\d--Muhammad-Nadeem-Mdev-Client-Bots-RunItUp-Bot\\09174fd0-9746-41e5-946d-e7f817754a5d\\scratchpad"

@@ -32,6 +32,7 @@ from utils.helpers import (
 from config.constants import (
     BRAND_COLOR,
     CURRENT_SEASON,
+    SEASON_PREFIX,
     TIERS,
     MONTHLY_VICTORY_WEEK_GROUPS,
     RAFFLE_DRAW_TIERS,
@@ -460,4 +461,70 @@ async def raffle_winners(interaction: discord.Interaction):
         logger.error(f"❌ Error in raffle_winners command: {e}")
         await interaction.followup.send(
             "❌ An error occurred while fetching raffle results.", ephemeral=True
+        )
+
+
+# Groups member commands for /q2 help - built from live command
+# descriptions (see below), so this only needs to be touched when a NEW
+# member command is added; nothing here goes stale on its own the way a
+# hand-written static embed would.
+_HELP_CATEGORIES = {
+    "📊 Your Stats": ["points", "mytier"],
+    "🏆 Leaderboards": ["leaderboard", "finalstandings"],
+    "🏁 Weekly & Monthly Winners": ["weeklywinners", "monthlywinners", "finishers"],
+    "🎟️ Championship Raffle": ["rafflepool", "rafflewinners"],
+}
+
+
+@season_group.command(name="help", description="See what commands you can use")
+async def help_command(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer()
+
+        # Member commands only - skip the admin-only goldenticket subgroup,
+        # anything tagged [ADMIN], and this command itself, so this never
+        # needs a manual allowlist to stay member-only as new commands get
+        # added.
+        member_commands = {
+            cmd.name: cmd
+            for cmd in season_group.commands
+            if not isinstance(cmd, app_commands.Group)
+            and "[ADMIN]" not in cmd.description
+            and cmd.name != "help"
+        }
+
+        embed = discord.Embed(
+            title="📖 RunItUp Commands",
+            description=f"Everything you can run under `/{SEASON_PREFIX}` — none of this needs mod permissions.",
+            color=BRAND_COLOR,
+        )
+
+        categorized = set()
+        for category, names in _HELP_CATEGORIES.items():
+            lines = []
+            for name in names:
+                cmd = member_commands.get(name)
+                if not cmd:
+                    continue
+                categorized.add(name)
+                lines.append(f"**`/{SEASON_PREFIX} {cmd.name}`** — {cmd.description}")
+            if lines:
+                embed.add_field(name=category, value="\n".join(lines), inline=False)
+
+        # Anything not in _HELP_CATEGORIES yet still shows up here, so a
+        # newly-added member command is never silently missing from /help.
+        leftover = [cmd for name, cmd in member_commands.items() if name not in categorized]
+        if leftover:
+            lines = [
+                f"**`/{SEASON_PREFIX} {cmd.name}`** — {cmd.description}"
+                for cmd in sorted(leftover, key=lambda c: c.name)
+            ]
+            embed.add_field(name="🔧 Other", value="\n".join(lines), inline=False)
+
+        embed.set_footer(text=f"{CURRENT_SEASON} Challenge")
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in help command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching the command list.", ephemeral=True
         )

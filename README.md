@@ -103,6 +103,7 @@ The moment a week finalizes, a month finalizes, someone becomes an Official Fini
 
 | Command | Shows |
 |---|---|
+| `help` | Every member command, grouped and pulled live from what's actually registered — never goes stale |
 | `points` | Your points, tier, Scaler/Masters badges, Official Finisher badge, weeks/months won, raffle tickets, season rank |
 | `leaderboard [limit] [scope: season\|week\|month]` | Ranked list for the chosen scope |
 | `mytier` | Current tier and progress to the next one |
