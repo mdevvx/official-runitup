@@ -4,7 +4,7 @@ from discord.ext import commands
 from datetime import datetime
 from typing import Literal, Optional
 
-from database.models import UserModel
+from database.models import UserModel, GoldenTicketModel, RaffleDrawModel
 from database.bot_config import BotConfigModel, VALID_CHANNEL_TYPES
 from utils.logger import get_logger
 from utils.helpers import (
@@ -23,9 +23,14 @@ from config.constants import (
     CURRENT_SEASON,
     TIERS,
     POINTS,
+    OFFICIAL_FINISHER_WEEKS_RATIO,
+    OFFICIAL_FINISHER_POINTS_RATIO,
+    RAFFLE_TICKETS,
+    GOLDEN_TICKET_NEXT_N_DEFAULT,
+    GOLDEN_TICKET_STREAK_DAYS,
 )
 from config.settings import MAX_REFERRALS
-from cogs.season_group import season_group
+from cogs.season_group import season_group, golden_ticket_group
 
 logger = get_logger(__name__)
 
@@ -128,7 +133,7 @@ async def add_points(
             bonus_applied = True
 
         updated_user = await UserModel.update_points(
-            user.id, awarded_points, reason, bot=interaction.client
+            user.id, awarded_points, reason, bot=interaction.client, category="performance"
         )
 
         tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
@@ -191,7 +196,7 @@ async def remove_points(
             return
 
         updated_user = await UserModel.update_points(
-            user.id, -points, reason, bot=interaction.client
+            user.id, -points, reason, bot=interaction.client, category="performance"
         )
 
         tier_role = get_tier_role_mention(updated_user["tier"], interaction.guild)
@@ -458,6 +463,207 @@ async def set_tier_points(
 
 
 # ----------------------------------------------------------------------
+# Weekly Victory / Official Finisher thresholds
+# ----------------------------------------------------------------------
+
+
+@season_group.command(
+    name="setweeklyvictorythreshold",
+    description="[ADMIN] Override the points needed to win a week (default: auto-computed 51%)",
+)
+@app_commands.describe(points="Points needed to win a week")
+async def set_weekly_victory_threshold(interaction: discord.Interaction, points: int):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        if points < 1:
+            await send_error_embed(interaction, "❌ Points must be 1 or greater.")
+            return
+
+        await BotConfigModel.set_weekly_victory_threshold(
+            points, updated_by=interaction.user.id
+        )
+
+        logger.info(
+            f"✅ {interaction.user.name} set Weekly Victory threshold to {points} points"
+        )
+
+        await send_success_embed(
+            interaction,
+            f"✅ Weekly Victory threshold set to **{points}** points. "
+            f"Already-finalized weeks are unaffected - this only applies going forward.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_weekly_victory_threshold command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while setting the Weekly Victory threshold."
+        )
+
+
+@season_group.command(
+    name="setfinisherpoints",
+    description="[ADMIN] Override the total-points path to Official Finisher (default: auto ~82.5%)",
+)
+@app_commands.describe(points="Total season points needed to qualify as an Official Finisher")
+async def set_finisher_points(interaction: discord.Interaction, points: int):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        if points < 1:
+            await send_error_embed(interaction, "❌ Points must be 1 or greater.")
+            return
+
+        await BotConfigModel.set_official_finisher_points_threshold(
+            points, updated_by=interaction.user.id
+        )
+
+        logger.info(
+            f"✅ {interaction.user.name} set Official Finisher points threshold to {points}"
+        )
+
+        await send_success_embed(
+            interaction,
+            f"✅ Official Finisher points threshold pinned to **{points}** "
+            f"(overriding the auto-computed default). Members now qualify by winning "
+            f"{int(OFFICIAL_FINISHER_WEEKS_RATIO * 100)}% of weeks **or** reaching this total.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in set_finisher_points command: {e}")
+        await send_error_embed(
+            interaction, "❌ An error occurred while setting the finisher points threshold."
+        )
+
+
+# ----------------------------------------------------------------------
+# Golden Ticket events - all moderator-triggered ("no warning, no
+# schedule" per the doc). Nothing here fires on its own.
+# ----------------------------------------------------------------------
+
+
+@golden_ticket_group.command(
+    name="day",
+    description="[ADMIN] Flag THIS week as a Golden Ticket Day - its eventual winners get a bonus",
+)
+async def golden_ticket_day(interaction: discord.Interaction):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        week_number = await GoldenTicketModel.flag_golden_ticket_day(
+            updated_by=interaction.user.id
+        )
+
+        if week_number is None:
+            await send_error_embed(
+                interaction,
+                "❌ There's no active challenge week right now (dates not set, or the "
+                "challenge hasn't started/has ended).",
+            )
+            return
+
+        logger.info(f"🎉 {interaction.user.name} flagged Week {week_number} as Golden Ticket Day")
+
+        await send_success_embed(
+            interaction,
+            f"🎉 **Week {week_number}** is now a Golden Ticket Day! Anyone who wins this week "
+            f"gets **+{RAFFLE_TICKETS['GOLDEN_TICKET_DAY']}** bonus tickets on top of the normal "
+            f"Win the Week reward, applied automatically once the week finalizes.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in golden_ticket_day command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while flagging the Golden Ticket Day.")
+
+
+@golden_ticket_group.command(
+    name="next25",
+    description="[ADMIN] Arm a bonus for the next N people to complete today's habits (doc default: 25)",
+)
+@app_commands.describe(count=f"How many people get the bonus (default {GOLDEN_TICKET_NEXT_N_DEFAULT})")
+async def golden_ticket_next_n(interaction: discord.Interaction, count: Optional[int] = None):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        count = count or GOLDEN_TICKET_NEXT_N_DEFAULT
+        if count < 1:
+            await send_error_embed(interaction, "❌ Count must be 1 or greater.")
+            return
+
+        await GoldenTicketModel.arm_next_n(count, updated_by=interaction.user.id)
+
+        logger.info(f"🎉 {interaction.user.name} armed Golden Ticket Next {count}")
+
+        await send_success_embed(
+            interaction,
+            f"🎉 Armed! The next **{count}** people to complete today's habits each get "
+            f"**+{RAFFLE_TICKETS['GOLDEN_TICKET_NEXT_N']}** bonus tickets, awarded automatically "
+            f"in real time as they qualify.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in golden_ticket_next_n command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while arming the bonus.")
+
+
+@golden_ticket_group.command(
+    name="streak",
+    description=f"[ADMIN] Immediately grant a bonus to everyone on a {GOLDEN_TICKET_STREAK_DAYS}+ day streak",
+)
+async def golden_ticket_streak(interaction: discord.Interaction):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        awarded = await GoldenTicketModel.award_streak_bonus()
+
+        logger.info(
+            f"🎉 {interaction.user.name} triggered the streak Golden Ticket - {len(awarded)} awarded"
+        )
+
+        await send_success_embed(
+            interaction,
+            f"🎉 **{len(awarded)}** member(s) on a {GOLDEN_TICKET_STREAK_DAYS}+ day streak each "
+            f"received **+{RAFFLE_TICKETS['GOLDEN_TICKET_STREAK']}** bonus tickets.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in golden_ticket_streak command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while awarding the streak bonus.")
+
+
+@golden_ticket_group.command(
+    name="allhabits",
+    description="[ADMIN] Immediately grant a bonus to everyone who's completed every habit today",
+)
+async def golden_ticket_all_habits(interaction: discord.Interaction):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        awarded = await GoldenTicketModel.award_all_habits_bonus()
+
+        logger.info(
+            f"🎉 {interaction.user.name} triggered the all-habits Golden Ticket - "
+            f"{len(awarded)} awarded"
+        )
+
+        await send_success_embed(
+            interaction,
+            f"🎉 **{len(awarded)}** member(s) who completed every habit today each received "
+            f"**+{RAFFLE_TICKETS['GOLDEN_TICKET_ALL_HABITS']}** bonus tickets.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in golden_ticket_all_habits command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while awarding the bonus.")
+
+
+# ----------------------------------------------------------------------
 # Masters bonus role + role binding (Masters/Scalers -> actual Discord role)
 # ----------------------------------------------------------------------
 
@@ -627,6 +833,26 @@ async def show_config(interaction: discord.Interaction):
             window_text = f"No dates set yet (`/{CURRENT_SEASON.lower()} setchallengedates`)\n{status_labels[status]}"
         embed.add_field(name="📅 Challenge Window", value=window_text, inline=False)
 
+        # Weekly Victory / Official Finisher thresholds
+        finisher_points_override = BotConfigModel.get_official_finisher_points_threshold()
+        if finisher_points_override:
+            finisher_points_text = f"{finisher_points_override}+ total points (admin-pinned)"
+        else:
+            highest = await UserModel.get_highest_total_points()
+            auto_points = round(highest * OFFICIAL_FINISHER_POINTS_RATIO)
+            finisher_points_text = (
+                f"{auto_points}+ total points (auto: {int(OFFICIAL_FINISHER_POINTS_RATIO * 100)}% "
+                f"of current leader's {highest})"
+            )
+        weekly_victory_text = (
+            f"**Weekly Victory:** {BotConfigModel.get_weekly_victory_threshold()}+ points/week\n"
+            f"**Official Finisher:** win {int(OFFICIAL_FINISHER_WEEKS_RATIO * 100)}% of weeks "
+            f"**or** reach {finisher_points_text}"
+        )
+        embed.add_field(
+            name="🏁 Weekly Victory", value=weekly_victory_text, inline=False
+        )
+
         # Tier thresholds - resolve the actual bound Discord role, not just the name
         thresholds = BotConfigModel.get_tier_thresholds()
         tier_lines = []
@@ -682,6 +908,60 @@ async def show_config(interaction: discord.Interaction):
         await send_error_embed(
             interaction, "❌ An error occurred while showing configuration."
         )
+
+
+# ----------------------------------------------------------------------
+# Championship Raffle draw - the actual Prize Pool drawing (separate from
+# ticket earning, which happens automatically all season). One-time,
+# high-stakes, so it's confirm-gated and refuses to re-draw a season.
+# ----------------------------------------------------------------------
+
+
+@season_group.command(
+    name="raffledraw",
+    description="[ADMIN] Run the Championship Raffle Prize Pool draw - ONE TIME ONLY per season",
+)
+@app_commands.describe(
+    confirm="Must be True to actually run the draw - this cannot be undone or re-run"
+)
+async def raffle_draw(interaction: discord.Interaction, confirm: bool):
+    if not await _require_admin(interaction):
+        return
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        if not confirm:
+            await send_error_embed(
+                interaction,
+                "❌ Set `confirm:True` to actually run the draw. This picks real winners "
+                "for real prizes and cannot be undone or re-run once it's done.",
+            )
+            return
+
+        if await RaffleDrawModel.has_been_drawn():
+            await send_error_embed(
+                interaction,
+                f"❌ The {CURRENT_SEASON} raffle has already been drawn. "
+                f"Check `/{CURRENT_SEASON.lower()} rafflewinners` for the results.",
+            )
+            return
+
+        results = await RaffleDrawModel.run_draw(bot=interaction.client)
+        total_winners = sum(len(w) for w in results.values())
+
+        logger.info(f"🎟️ {interaction.user.name} ran the Championship Raffle draw")
+
+        await send_success_embed(
+            interaction,
+            f"🎉 Draw complete — **{total_winners}** total winners across "
+            f"{len(results)} tiers. Results posted to the announcements channel "
+            f"and viewable anytime via `/{CURRENT_SEASON.lower()} rafflewinners`.",
+        )
+    except ValueError as e:
+        await send_error_embed(interaction, f"❌ {e}")
+    except Exception as e:
+        logger.error(f"❌ Error in raffle_draw command: {e}")
+        await send_error_embed(interaction, "❌ An error occurred while running the raffle draw.")
 
 
 async def setup(bot):

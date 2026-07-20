@@ -2,12 +2,13 @@ import discord
 from discord.ext import commands, tasks
 from datetime import datetime, time
 
-from database.models import UserModel
+from database.models import UserModel, WeeklyVictoryModel, MonthlyVictoryModel, ChampionshipModel
 from database.bot_config import BotConfigModel
 from utils.logger import get_logger
 from utils.embeds import create_leaderboard_embed
+from utils.helpers import get_current_week_range, get_closed_week_ranges, challenge_status
 from config.settings import GUILD_ID
-from config.constants import TIERS
+from config.constants import CURRENT_SEASON, TIERS, MONTHLY_VICTORY_WEEK_GROUPS
 
 logger = get_logger(__name__)
 
@@ -19,6 +20,7 @@ class Tasks(commands.Cog):
         self.bot = bot
         self.update_leaderboard_task.start()
         self.update_tier_roles_task.start()
+        self.finalize_weekly_victory_task.start()
         self.backup_data_task.start()
         logger.info("Tasks cog loaded")
 
@@ -26,6 +28,7 @@ class Tasks(commands.Cog):
         """Stop tasks when cog is unloaded"""
         self.update_leaderboard_task.cancel()
         self.update_tier_roles_task.cancel()
+        self.finalize_weekly_victory_task.cancel()
         self.backup_data_task.cancel()
 
     @tasks.loop(hours=6)
@@ -33,12 +36,6 @@ class Tasks(commands.Cog):
         """Update leaderboard every 6 hours"""
         try:
             logger.info("🔄 Starting leaderboard update task...")
-
-            # Get leaderboard
-            users = await UserModel.get_leaderboard(limit=10)
-
-            # Create embed
-            embed = create_leaderboard_embed(users)
 
             # Get leaderboard channel
             leaderboard_channel_id = BotConfigModel.get_channel_id("leaderboard")
@@ -57,8 +54,36 @@ class Tasks(commands.Cog):
                 if message.author == self.bot.user:
                     await message.delete()
 
-            # Send new leaderboard
-            await leaderboard_channel.send(embed=embed)
+            status = challenge_status()
+            if status == "not_started":
+                await leaderboard_channel.send(
+                    "📅 The challenge hasn't started yet — check back once it begins!"
+                )
+                logger.info("ℹ️ Leaderboard task skipped - challenge not started")
+                return
+
+            # Season (lifetime) leaderboard - always shown once the challenge
+            # has started (still relevant after "ended", so no skip there)
+            users = await UserModel.get_leaderboard(limit=10)
+            embeds = [create_leaderboard_embed(users)]
+
+            # Weekly leaderboard - only while there's a current week to show
+            # (see get_current_week_range; None once the challenge has ended)
+            week_range = get_current_week_range()
+            if week_range:
+                _, _, week_number = week_range
+                weekly_users = await UserModel.get_weekly_leaderboard(limit=10)
+                embeds.append(
+                    create_leaderboard_embed(
+                        weekly_users,
+                        title=f"📅 WEEK {week_number} LEADERBOARD",
+                        description=f"Top performers this week in the {CURRENT_SEASON} Challenge",
+                        footer_text=f"{CURRENT_SEASON} Challenge • Week {week_number}",
+                    )
+                )
+
+            # Send new leaderboard (season + week embeds in one message)
+            await leaderboard_channel.send(embeds=embeds)
 
             logger.info("✅ Leaderboard updated successfully")
 
@@ -155,6 +180,57 @@ class Tasks(commands.Cog):
 
     @update_tier_roles_task.before_loop
     async def before_update_tier_roles(self):
+        """Wait until bot is ready"""
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=1)
+    async def finalize_weekly_victory_task(self):
+        """Finalize Weekly Victory for any week that's fully closed (points
+        won't change anymore), finalize Monthly Victory for any month whose
+        last constituent week just finalized, re-check Official Finisher
+        status, then finalize the Grand Championship Leaderboard once the
+        challenge has fully ended. Re-running any of this for an
+        already-finalized week/month/challenge is a safe no-op (see
+        WeeklyVictoryModel.finalize_week / MonthlyVictoryModel.finalize_month /
+        ChampionshipModel.finalize_challenge_end), so this just catches up
+        on whatever closed since the last run - including if the bot was
+        offline when a week ended."""
+        try:
+            closed_weeks = get_closed_week_ranges()
+            if not closed_weeks:
+                return
+
+            logger.info(f"🔄 Checking {len(closed_weeks)} closed week(s) for Weekly Victory...")
+
+            closed_week_numbers = set()
+            for week_start, week_end, week_number in closed_weeks:
+                await WeeklyVictoryModel.finalize_week(
+                    week_number, week_start, week_end, bot=self.bot
+                )
+                closed_week_numbers.add(week_number)
+
+            for month_number, (_, last_week) in MONTHLY_VICTORY_WEEK_GROUPS.items():
+                if last_week in closed_week_numbers:
+                    await MonthlyVictoryModel.finalize_month(month_number, bot=self.bot)
+
+            newly_qualified = await WeeklyVictoryModel.check_all_official_finishers(
+                bot=self.bot
+            )
+            if newly_qualified:
+                logger.info(f"✅ {len(newly_qualified)} new Official Finisher(s)")
+
+            if challenge_status() == "ended":
+                newly_founders = await ChampionshipModel.finalize_challenge_end(
+                    bot=self.bot
+                )
+                if newly_founders:
+                    logger.info(f"🏆 {len(newly_founders)} new Founder(s) (Grand Championship)")
+
+        except Exception as e:
+            logger.error(f"❌ Error in finalize_weekly_victory_task: {e}")
+
+    @finalize_weekly_victory_task.before_loop
+    async def before_finalize_weekly_victory(self):
         """Wait until bot is ready"""
         await self.bot.wait_until_ready()
 

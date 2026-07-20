@@ -1,22 +1,41 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import Optional
+from typing import Literal, Optional
 
-from database.models import UserModel, DailyActivityModel
+from database.models import (
+    UserModel,
+    DailyActivityModel,
+    WeeklyVictoryModel,
+    MonthlyVictoryModel,
+    RaffleTicketModel,
+    RaffleDrawModel,
+)
 from database.bot_config import BotConfigModel
 from utils.logger import get_logger
 from utils.embeds import (
     create_user_stats_embed,
     create_leaderboard_embed,
+    create_winners_list_embed,
+    create_raffle_draw_embed,
 )
 from utils.helpers import (
     is_challenge_active,
     challenge_status,
+    get_current_week_range,
+    get_challenge_week_ranges,
+    get_current_month_range,
+    get_closed_week_ranges,
     get_tier_emoji,
     get_tier_role_mention,
 )
-from config.constants import BRAND_COLOR, TIERS
+from config.constants import (
+    BRAND_COLOR,
+    CURRENT_SEASON,
+    TIERS,
+    MONTHLY_VICTORY_WEEK_GROUPS,
+    RAFFLE_DRAW_TIERS,
+)
 from cogs.season_group import season_group
 
 logger = get_logger(__name__)
@@ -74,8 +93,19 @@ async def points(interaction: discord.Interaction):
             interaction.user.id, interaction.user.name
         )
 
+        weeks_won = await WeeklyVictoryModel.get_weeks_won(interaction.user.id)
+        total_weeks = len(get_challenge_week_ranges())
+        months_won = await MonthlyVictoryModel.get_months_won(interaction.user.id)
+        total_months = len(MONTHLY_VICTORY_WEEK_GROUPS)
+
         embed = create_user_stats_embed(
-            user_data, discord_user=interaction.user, guild=interaction.guild
+            user_data,
+            discord_user=interaction.user,
+            guild=interaction.guild,
+            weeks_won=weeks_won,
+            total_weeks=total_weeks or None,
+            months_won=months_won,
+            total_months=total_months or None,
         )
 
         leaderboard_data = await UserModel.get_leaderboard(limit=100)
@@ -102,8 +132,16 @@ async def points(interaction: discord.Interaction):
         )
 
 
-@season_group.command(name="leaderboard", description="View the top 10 leaderboard")
-async def leaderboard(interaction: discord.Interaction, limit: Optional[int] = 10):
+@season_group.command(name="leaderboard", description="View the leaderboard")
+@app_commands.describe(
+    limit="Number of users to show (max 25)",
+    scope="Season-long ranking (default), this week's points, or this month's points",
+)
+async def leaderboard(
+    interaction: discord.Interaction,
+    limit: Optional[int] = 10,
+    scope: Optional[Literal["season", "week", "month"]] = "season",
+):
     try:
         await interaction.response.defer()
 
@@ -119,8 +157,42 @@ async def leaderboard(interaction: discord.Interaction, limit: Optional[int] = 1
         if limit < 1 or limit > 25:
             limit = 10
 
-        users = await UserModel.get_leaderboard(limit=limit)
-        embed = create_leaderboard_embed(users, title=f"🏆 TOP {len(users)} LEADERBOARD")
+        if scope == "week":
+            week_range = get_current_week_range()
+            if not week_range:
+                await interaction.followup.send(
+                    "📅 The weekly leaderboard isn't available yet — check back once the challenge is underway."
+                )
+                return
+            _, _, week_number = week_range
+
+            users = await UserModel.get_weekly_leaderboard(limit=limit)
+            embed = create_leaderboard_embed(
+                users,
+                title=f"📅 WEEK {week_number} LEADERBOARD",
+                description=f"Top performers this week in the {CURRENT_SEASON} Challenge",
+                footer_text=f"{CURRENT_SEASON} Challenge • Week {week_number}",
+            )
+        elif scope == "month":
+            month_range = get_current_month_range()
+            if not month_range:
+                await interaction.followup.send(
+                    "📅 There's no active Monthly Victory month right now "
+                    "(some weeks, like the last leftover ones, don't belong to a month)."
+                )
+                return
+            month_start, month_end, month_number = month_range
+
+            users = await UserModel.get_monthly_leaderboard(month_start, month_end, limit=limit)
+            embed = create_leaderboard_embed(
+                users,
+                title=f"🗓️ MONTH {month_number} LEADERBOARD",
+                description=f"Top performers this month in the {CURRENT_SEASON} Challenge",
+                footer_text=f"{CURRENT_SEASON} Challenge • Month {month_number}",
+            )
+        else:
+            users = await UserModel.get_leaderboard(limit=limit)
+            embed = create_leaderboard_embed(users, title=f"🏆 TOP {len(users)} LEADERBOARD")
 
         await interaction.followup.send(embed=embed)
 
@@ -183,4 +255,209 @@ async def mytier(interaction: discord.Interaction):
         logger.error(f"❌ Error in mytier command: {e}")
         await interaction.followup.send(
             "❌ An error occurred while checking your tier.", ephemeral=True
+        )
+
+
+@season_group.command(
+    name="weeklywinners", description="See who won a given week (defaults to the most recent)"
+)
+@app_commands.describe(week_number="Which week to check (defaults to the most recently closed week)")
+async def weekly_winners(interaction: discord.Interaction, week_number: Optional[int] = None):
+    try:
+        await interaction.response.defer()
+
+        if week_number is None:
+            closed_weeks = get_closed_week_ranges()
+            if not closed_weeks:
+                await interaction.followup.send(
+                    "📅 No week has closed yet — check back once the first week ends."
+                )
+                return
+            week_number = max(wn for _, _, wn in closed_weeks)
+
+        winners = await WeeklyVictoryModel.get_week_winners(week_number)
+        entries = [
+            {
+                "user_id": w["user_id"],
+                "mention": w["mention"],
+                "detail": f"{w['points_earned']} pts",
+            }
+            for w in winners
+        ]
+        embed = create_winners_list_embed(
+            entries,
+            title=f"🏁 Week {week_number} Victors",
+            footer_text=f"{CURRENT_SEASON} Challenge • Weekly Victory",
+        )
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in weekly_winners command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching weekly winners.", ephemeral=True
+        )
+
+
+@season_group.command(
+    name="monthlywinners", description="See who won a given month (defaults to the most recent)"
+)
+@app_commands.describe(month_number="Which month to check (defaults to the most recently closed month)")
+async def monthly_winners(interaction: discord.Interaction, month_number: Optional[int] = None):
+    try:
+        await interaction.response.defer()
+
+        if month_number is None:
+            closed_week_numbers = {wn for _, _, wn in get_closed_week_ranges()}
+            candidate_months = [
+                m
+                for m, (_, last_week) in MONTHLY_VICTORY_WEEK_GROUPS.items()
+                if last_week in closed_week_numbers
+            ]
+            if not candidate_months:
+                await interaction.followup.send(
+                    "📅 No month has closed yet — check back once Month 1 (Week 4) ends."
+                )
+                return
+            month_number = max(candidate_months)
+
+        winners = await MonthlyVictoryModel.get_month_winners(month_number)
+        group = MONTHLY_VICTORY_WEEK_GROUPS.get(month_number)
+        weeks_in_month = (group[1] - group[0] + 1) if group else None
+
+        entries = [
+            {
+                "user_id": w["user_id"],
+                "mention": w["mention"],
+                "detail": f"{w['weeks_won']}/{weeks_in_month or w['weeks_required']} weeks",
+            }
+            for w in winners
+        ]
+        embed = create_winners_list_embed(
+            entries,
+            title=f"📆 Month {month_number} Champions",
+            footer_text=f"{CURRENT_SEASON} Challenge • Monthly Victory",
+        )
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in monthly_winners command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching monthly winners.", ephemeral=True
+        )
+
+
+@season_group.command(
+    name="finishers", description="See everyone who's earned Official Finisher status"
+)
+async def finishers(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer()
+
+        finisher_list = await WeeklyVictoryModel.get_all_official_finishers()
+        entries = [
+            {
+                "user_id": f["user_id"],
+                "mention": f["mention"],
+                "detail": f"{f['total_points']} pts",
+            }
+            for f in finisher_list
+        ]
+        embed = create_winners_list_embed(
+            entries,
+            title="🎖️ Official Finishers",
+            description="Won 9 of 10 weeks, or hit the season points bar.",
+            footer_text=f"{CURRENT_SEASON} Challenge • Official Finisher",
+        )
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in finishers command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching Official Finishers.", ephemeral=True
+        )
+
+
+@season_group.command(
+    name="finalstandings", description="Top 25 season standings (locked once the challenge ends)"
+)
+async def final_standings(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer()
+
+        status = challenge_status()
+        leaderboard = await UserModel.get_leaderboard(limit=25)
+
+        if status == "ended":
+            title = "🏆 FINAL STANDINGS — LOCKED"
+            description = "The challenge has ended — this is the final Grand Championship ranking."
+        else:
+            title = "📊 Current Standings (Live)"
+            description = "The challenge is still in progress — this ranking will keep changing until it ends."
+
+        embed = create_leaderboard_embed(leaderboard, title=title, description=description)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in final_standings command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching final standings.", ephemeral=True
+        )
+
+
+@season_group.command(
+    name="rafflepool", description="See the current Championship Raffle ticket standings"
+)
+@app_commands.describe(limit="Number of users to show (max 25)")
+async def raffle_pool(interaction: discord.Interaction, limit: Optional[int] = 10):
+    try:
+        await interaction.response.defer()
+
+        if limit < 1 or limit > 25:
+            limit = 10
+
+        top_tickets = await RaffleTicketModel.get_ticket_leaderboard(limit=limit)
+        entries = [
+            {
+                "user_id": u["user_id"],
+                "mention": u["mention"],
+                "detail": f"{u['raffle_tickets']} tickets",
+            }
+            for u in top_tickets
+        ]
+        embed = create_winners_list_embed(
+            entries,
+            title="🎟️ Championship Raffle — Ticket Standings",
+            description="More tickets = better odds when the draw happens — leaderboard rank doesn't matter here.",
+            footer_text=f"{CURRENT_SEASON} Challenge • Championship Raffle",
+            empty_text="Nobody's earned any raffle tickets yet.",
+        )
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in raffle_pool command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching the raffle standings.", ephemeral=True
+        )
+
+
+@season_group.command(
+    name="rafflewinners", description="See the Championship Raffle draw results (once drawn)"
+)
+async def raffle_winners(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer()
+
+        results = await RaffleDrawModel.get_draw_results()
+        if not results:
+            await interaction.followup.send(
+                "🎟️ The Championship Raffle hasn't been drawn yet — check back at the Finale!"
+            )
+            return
+
+        tier_results = []
+        for tier_key, (tier_name, _) in RAFFLE_DRAW_TIERS.items():
+            mentions = [row["mention"] for row in results.get(tier_key, [])]
+            tier_results.append((tier_name, mentions))
+
+        embed = create_raffle_draw_embed(tier_results)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        logger.error(f"❌ Error in raffle_winners command: {e}")
+        await interaction.followup.send(
+            "❌ An error occurred while fetching raffle results.", ephemeral=True
         )

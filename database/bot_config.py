@@ -146,3 +146,105 @@ class BotConfigModel:
         await cls.set("challenge_start_date", start_date, updated_by)
         await cls.set("challenge_end_date", end_date, updated_by)
         await cls.set("challenge_timezone", timezone, updated_by)
+
+    @classmethod
+    def get_weekly_victory_threshold(cls) -> int:
+        """Points needed to win a week - defaults to the auto-computed
+        WEEKLY_VICTORY_THRESHOLD_DEFAULT, overridable via
+        /<season> setweeklyvictorythreshold."""
+        from config.constants import WEEKLY_VICTORY_THRESHOLD_DEFAULT
+
+        raw = cls._cache.get("weekly_victory_threshold")
+        return int(raw) if raw else WEEKLY_VICTORY_THRESHOLD_DEFAULT
+
+    @classmethod
+    async def set_weekly_victory_threshold(
+        cls, points: int, updated_by: Optional[int] = None
+    ):
+        await cls.set("weekly_victory_threshold", str(points), updated_by)
+
+    @classmethod
+    def get_official_finisher_points_threshold(cls) -> Optional[int]:
+        """Total season points needed for the alternate Official Finisher
+        path (the doc's '~80-85% of all available points'). None until an
+        admin sets one via /<season> setfinisherpoints - there's no safe
+        automatic ceiling since wins/referrals are open-ended. The
+        weeks-won path (OFFICIAL_FINISHER_WEEKS_RATIO) works without this."""
+        raw = cls._cache.get("official_finisher_points_threshold")
+        return int(raw) if raw else None
+
+    @classmethod
+    async def set_official_finisher_points_threshold(
+        cls, points: int, updated_by: Optional[int] = None
+    ):
+        await cls.set("official_finisher_points_threshold", str(points), updated_by)
+
+    @classmethod
+    def get_golden_ticket_weeks(cls) -> list:
+        """Week numbers flagged as a Golden Ticket Day (see /<season>
+        goldenticket day) - anyone who wins one of these weeks gets the
+        GOLDEN_TICKET_DAY bonus on top of the normal Win the Week reward,
+        applied when that week finalizes (see WeeklyVictoryModel.finalize_week)."""
+        raw = cls._cache.get("golden_ticket_weeks")
+        return json.loads(raw) if raw else []
+
+    @classmethod
+    async def flag_golden_ticket_week(cls, week_number: int, updated_by: Optional[int] = None):
+        weeks = cls.get_golden_ticket_weeks()
+        if week_number not in weeks:
+            weeks.append(week_number)
+            await cls.set("golden_ticket_weeks", json.dumps(weeks), updated_by)
+
+    @classmethod
+    def get_golden_ticket_next_n(cls) -> tuple:
+        """Returns (remaining, token) for an armed "next N people" Golden
+        Ticket event (see /<season> goldenticket next25) - remaining counts
+        down as people complete today's first habit action; token makes
+        each arming's ticket-history reason unique so the same person can
+        benefit from a later re-arming. (0, None) if nothing is armed."""
+        remaining_raw = cls._cache.get("golden_ticket_next_n_remaining")
+        token = cls._cache.get("golden_ticket_next_n_token")
+        remaining = int(remaining_raw) if remaining_raw else 0
+        return remaining, token
+
+    @classmethod
+    async def arm_golden_ticket_next_n(
+        cls, count: int, token: str, updated_by: Optional[int] = None
+    ):
+        await cls.set("golden_ticket_next_n_remaining", str(count), updated_by)
+        await cls.set("golden_ticket_next_n_token", token, updated_by)
+
+    @classmethod
+    async def decrement_golden_ticket_next_n(cls):
+        remaining, _ = cls.get_golden_ticket_next_n()
+        if remaining > 0:
+            await cls.set("golden_ticket_next_n_remaining", str(remaining - 1))
+
+    @classmethod
+    def get_announced_weeks(cls, season: str) -> list:
+        """Week numbers already auto-announced this season - lets
+        finalize_week (re-run hourly, safe to repeat) post its winners
+        announcement exactly once, whether or not the week had any
+        winners."""
+        raw = cls._cache.get(f"announced_weeks_{season}")
+        return json.loads(raw) if raw else []
+
+    @classmethod
+    async def mark_week_announced(cls, week_number: int, season: str):
+        weeks = cls.get_announced_weeks(season)
+        if week_number not in weeks:
+            weeks.append(week_number)
+            await cls.set(f"announced_weeks_{season}", json.dumps(weeks))
+
+    @classmethod
+    def get_announced_months(cls, season: str) -> list:
+        """Same as get_announced_weeks, for Monthly Victory."""
+        raw = cls._cache.get(f"announced_months_{season}")
+        return json.loads(raw) if raw else []
+
+    @classmethod
+    async def mark_month_announced(cls, month_number: int, season: str):
+        months = cls.get_announced_months(season)
+        if month_number not in months:
+            months.append(month_number)
+            await cls.set(f"announced_months_{season}", json.dumps(months))

@@ -12,3 +12,14 @@ season_group = app_commands.Group(
     name=SEASON_PREFIX,
     description=f"{CURRENT_SEASON} challenge commands",
 )
+
+# Nested subgroup for the 4 Golden Ticket admin commands (/<season>
+# goldenticket day|next25|streak|allhabits). A subgroup's children don't
+# count against the parent group's 25-direct-child limit - the group
+# itself is one child of season_group, so this is also what keeps
+# season_group under that limit as more commands get added over time.
+golden_ticket_group = app_commands.Group(
+    name="goldenticket",
+    description="Moderator-triggered Golden Ticket surprise bonus events",
+    parent=season_group,
+)

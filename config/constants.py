@@ -65,3 +65,101 @@ MAX_POINTS_PER_POST = 30
 MAX_TODO_POSTS_PER_DAY = 1  # New: 1 daily todo post per day
 
 BRAND_COLOR = 0x719DCB
+
+# ----------------------------------------------------------------------
+# Weekly Victory / Official Finisher
+# ----------------------------------------------------------------------
+# Weekly Victory rewards *consistency*, not performance - a member wins the
+# week by earning >=51% of what's realistically achievable that week from
+# the auto-tracked daily habits: daily activity, daily todo, one
+# calls-channel post/day (not code-capped, but that's the realistic
+# ceiling), and capped value-drop posts. Deliberately excludes open-ended
+# performance/event points (wins, referrals, case studies, reviews) - those
+# aren't capped per week, and already drive the season/weekly leaderboard
+# separately (see points_history.category and UserModel.update_points).
+_WEEKLY_VICTORY_MAX_POINTS = 7 * (
+    POINTS["DAILY_ACTIVITY"]
+    + POINTS["DAILY_TODO"] * MAX_TODO_POSTS_PER_DAY
+    + POINTS["CALLS_POST"]
+    + MAX_VALUE_POSTS_PER_DAY * MAX_POINTS_PER_POST
+)
+# Default Weekly Victory threshold - overridable via
+# /<season> setweeklyvictorythreshold (see BotConfigModel.get_weekly_victory_threshold)
+# without touching code, same pattern as tier thresholds.
+WEEKLY_VICTORY_THRESHOLD_DEFAULT = round(_WEEKLY_VICTORY_MAX_POINTS * 0.51)
+
+# Official Finisher, path 1: win at least this fraction of the challenge's
+# weeks (doc: "9 of 10 weeks"). Computed automatically from the configured
+# challenge window - no setup needed.
+OFFICIAL_FINISHER_WEEKS_RATIO = 0.9
+
+# Official Finisher, path 2 (doc: "~80-85% of all available challenge
+# points"): there's no fixed ceiling to take a percentage of once open-ended
+# performance points (wins, referrals) are in play, so instead of a fixed
+# number this is computed live as this fraction of whatever the current
+# season leader's total_points is (see
+# UserModel.get_highest_total_points / WeeklyVictoryModel.check_and_award_official_finisher) -
+# fully automatic, no admin setup needed. /<season> setfinisherpoints can
+# still pin a fixed number instead, if ever wanted.
+OFFICIAL_FINISHER_POINTS_RATIO = 0.825  # midpoint of the doc's 80-85% range
+
+# Monthly Victory (doc: "win 3 of the 4 weeks, or 4 of 5 if needed"). The
+# reward table only ever names a "Month One Milestone" (Week 4) and "Month
+# Two Milestone" (Week 8) - no third month is defined, so Weeks 9-10 (this
+# season's leftover after two 4-week months) intentionally belong to no
+# month. {month_number: (first_week_number, last_week_number)}, both
+# inclusive - update this if the challenge dates/week count ever change.
+MONTHLY_VICTORY_WEEK_GROUPS = {
+    1: (1, 4),
+    2: (5, 8),
+}
+# ceil(4 * 0.75) = 3, ceil(5 * 0.75) = 4 - reproduces both cases the doc
+# states ("3 of 4" / "4 of 5") from one ratio, applied to however many
+# weeks are actually in a given month group.
+MONTHLY_VICTORY_WEEKS_RATIO = 0.75
+
+# Championship Raffle ticket values - straight from the doc's "Championship
+# Raffle" section. Weekly Top 10 / Weekly Champion / Monthly Top 10 /
+# Monthly Champion are performance (leaderboard ranking that week/month),
+# separate from and stacking with Win the Week / Win the Month
+# (consistency - crossing the Weekly/Monthly Victory threshold) - the doc
+# is explicit these can both apply to the same person. FINAL_TOP_25 /
+# FINAL_TOP_10 / GRAND_CHAMPION fire once, at challenge end, off the final
+# season leaderboard. The four GOLDEN_TICKET_* values are moderator-
+# triggered surprise bonuses (see cogs/admin.py's /q2 goldenticket* commands
+# and database/models.py's GoldenTicketModel) - "no warning, no schedule"
+# per the doc, so these are never fired automatically on their own.
+RAFFLE_TICKETS = {
+    "WIN_WEEK": 25,
+    "WEEKLY_TOP_10": 25,
+    "WEEKLY_CHAMPION": 100,
+    "WIN_MONTH": 100,
+    "MONTHLY_TOP_10": 100,
+    "MONTHLY_CHAMPION": 250,
+    "OFFICIAL_FINISHER": 500,
+    "FINAL_TOP_25": 250,
+    "FINAL_TOP_10": 500,
+    "GRAND_CHAMPION": 1000,
+    "GOLDEN_TICKET_DAY": 100,  # "anyone who wins the week that day" (the flagged week)
+    "GOLDEN_TICKET_NEXT_N": 25,  # each of "the next N people to complete today's habits"
+    "GOLDEN_TICKET_STREAK": 50,  # "everyone currently on a 14-day streak"
+    "GOLDEN_TICKET_ALL_HABITS": 100,  # "everyone who completes every habit today"
+}
+
+# "The next N people to complete today's habits" - doc says 25.
+GOLDEN_TICKET_NEXT_N_DEFAULT = 25
+
+# "Everyone currently on a 14-day streak" - doc says 14.
+GOLDEN_TICKET_STREAK_DAYS = 14
+
+# Championship Raffle Prize Pool draw tiers, in draw order (highest tier
+# first). Drawn weighted by ticket count, without replacement - once a
+# user is picked for a tier they're removed from the pool for every
+# lower tier, so nobody double-wins. {tier_key: (display name, winner count)}
+RAFFLE_DRAW_TIERS = {
+    "grand_prize": ("Grand Prize Winner", 1),
+    "two_winners": ("Two Winners", 2),
+    "three_winners": ("Three Winners", 3),
+    "five_winners": ("Five Winners", 5),
+    "ten_winners": ("Ten Winners", 10),
+}
