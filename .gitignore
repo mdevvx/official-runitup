@@ -9,3 +9,5 @@ venv/
 env/
 *.db
 .DS_Store
+.claude/
+docs/
