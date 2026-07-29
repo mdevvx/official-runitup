@@ -118,6 +118,14 @@ MONTHLY_VICTORY_WEEK_GROUPS = {
 # weeks are actually in a given month group.
 MONTHLY_VICTORY_WEEKS_RATIO = 0.75
 
+# Official Finisher's points-path (OFFICIAL_FINISHER_POINTS_RATIO above) is
+# gated until this many weeks have fully closed, matching the "Month One
+# Milestone" checkpoint. Early in the season the current leader's total is
+# too small for "82.5% of the leader" to mean anything - it would falsely
+# flag anyone merely near the top of a barely-started leaderboard as having
+# finished the season. See WeeklyVictoryModel.check_and_award_official_finisher.
+OFFICIAL_FINISHER_POINTS_PATH_MIN_CLOSED_WEEKS = MONTHLY_VICTORY_WEEK_GROUPS[1][1]
+
 # Championship Raffle ticket values - straight from the doc's "Championship
 # Raffle" section. Weekly Top 10 / Weekly Champion / Monthly Top 10 /
 # Monthly Champion are performance (leaderboard ranking that week/month),

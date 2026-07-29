@@ -1315,13 +1315,26 @@ class WeeklyVictoryModel:
         exists). Grants the badge role, the 500-ticket Championship Raffle
         bonus, and sets the persistent users.is_official_finisher flag the
         first time - the is_official_finisher guard below makes all of that
-        naturally one-time, no separate idempotency check needed."""
+        naturally one-time, no separate idempotency check needed.
+
+        The points-path threshold is the max of two floors, to stop early
+        false-positives (a barely-started leaderboard's leader has a tiny
+        total, so "82.5% of the leader" is trivial to clear for anyone near
+        the top - this used to flag people as season-finishers a week and a
+        half into a 10-week season): it's also not evaluated at all until
+        OFFICIAL_FINISHER_POINTS_PATH_MIN_CLOSED_WEEKS weeks have closed.
+        - leader-relative: OFFICIAL_FINISHER_POINTS_RATIO * current leader's total_points
+        - fixed expected-season floor: OFFICIAL_FINISHER_POINTS_RATIO * total_weeks *
+          the (consistency-only) weekly victory threshold, standing in for the doc's
+          "~80-85% of all available challenge points" now that there's enough season
+          elapsed for that stand-in to mean something."""
         import math
 
-        from utils.helpers import get_challenge_week_ranges
+        from utils.helpers import get_challenge_week_ranges, get_closed_week_ranges
         from config.constants import (
             OFFICIAL_FINISHER_WEEKS_RATIO,
             OFFICIAL_FINISHER_POINTS_RATIO,
+            OFFICIAL_FINISHER_POINTS_PATH_MIN_CLOSED_WEEKS,
             RAFFLE_TICKETS,
         )
         from database.bot_config import BotConfigModel
@@ -1344,8 +1357,15 @@ class WeeklyVictoryModel:
             if not qualifies:
                 points_threshold = BotConfigModel.get_official_finisher_points_threshold()
                 if not points_threshold:
-                    highest = await UserModel.get_highest_total_points()
-                    points_threshold = round(highest * OFFICIAL_FINISHER_POINTS_RATIO)
+                    closed_weeks = len(get_closed_week_ranges())
+                    if closed_weeks >= OFFICIAL_FINISHER_POINTS_PATH_MIN_CLOSED_WEEKS:
+                        highest = await UserModel.get_highest_total_points()
+                        leader_relative = round(highest * OFFICIAL_FINISHER_POINTS_RATIO)
+                        weekly_threshold = BotConfigModel.get_weekly_victory_threshold()
+                        expected_season_floor = round(
+                            weekly_threshold * total_weeks * OFFICIAL_FINISHER_POINTS_RATIO
+                        )
+                        points_threshold = max(leader_relative, expected_season_floor)
                 qualifies = bool(points_threshold) and user["total_points"] >= points_threshold
 
             if not qualifies:
