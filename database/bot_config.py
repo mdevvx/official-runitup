@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any, Optional
 
@@ -35,7 +36,7 @@ class BotConfigModel:
         """Load all config rows into memory. Call once from bot startup."""
         try:
             supabase = get_supabase()
-            response = supabase.table("bot_config").select("*").execute()
+            response = (await asyncio.to_thread(supabase.table("bot_config").select("*").execute))
             cls._cache = {row["key"]: row["value"] for row in response.data}
             cls._loaded = True
             logger.info(f"✅ Loaded {len(cls._cache)} bot_config entries")
@@ -51,9 +52,9 @@ class BotConfigModel:
     async def set(cls, key: str, value: str, updated_by: Optional[int] = None):
         try:
             supabase = get_supabase()
-            supabase.table("bot_config").upsert(
+            (await asyncio.to_thread(supabase.table("bot_config").upsert(
                 {"key": key, "value": value, "updated_by": updated_by}
-            ).execute()
+            ).execute))
             cls._cache[key] = value
             logger.info(f"BOT CONFIG SET | {key} = {value} | By: {updated_by}")
         except Exception as e:
@@ -111,6 +112,20 @@ class BotConfigModel:
         thresholds = cls.get_tier_thresholds()
         thresholds[tier_name] = min_points
         await cls.set("tier_thresholds", json.dumps(thresholds), updated_by)
+
+    @classmethod
+    def get_webhook_url(cls, channel_id: int) -> Optional[str]:
+        """Look up a manually-registered webhook URL for a channel (see
+        WinsRelay._get_webhook) - needed because Discord's list-webhooks
+        endpoint never returns a token, so a webhook found that way can't
+        actually send. Registered via /relaywebhookseturl."""
+        return cls._cache.get(f"webhook_url.{channel_id}")
+
+    @classmethod
+    async def set_webhook_url(
+        cls, channel_id: int, url: str, updated_by: Optional[int] = None
+    ):
+        await cls.set(f"webhook_url.{channel_id}", url, updated_by)
 
     @classmethod
     def get_role_id(cls, role_type: str) -> Optional[int]:

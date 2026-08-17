@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import date, datetime, timezone, timedelta
 from database.supabase_client import get_supabase
@@ -40,7 +41,7 @@ class UserModel:
 
             # Try to get user
             response = (
-                supabase.table("users").select("*").eq("user_id", user_id).execute()
+                (await asyncio.to_thread(supabase.table("users").select("*").eq("user_id", user_id).execute))
             )
 
             if response.data:
@@ -58,7 +59,7 @@ class UserModel:
                 "referral_count": 0,
             }
 
-            response = supabase.table("users").insert(new_user).execute()
+            response = (await asyncio.to_thread(supabase.table("users").insert(new_user).execute))
             logger.info(
                 f"USER CREATED | ID: {user_id} | Username: {username} | Initial Tier: OBSERVER"
             )
@@ -98,7 +99,7 @@ class UserModel:
 
             # Update user
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .update(
                     {
                         "total_points": new_total,
@@ -106,19 +107,18 @@ class UserModel:
                         "updated_at": datetime.utcnow().isoformat(),
                     }
                 )
-                .eq("user_id", user_id)
-                .execute()
+                .eq("user_id", user_id).execute))
             )
 
             # Log points history
-            supabase.table("points_history").insert(
+            (await asyncio.to_thread(supabase.table("points_history").insert(
                 {
                     "user_id": user_id,
                     "points_change": points_change,
                     "reason": reason,
                     "category": category,
                 }
-            ).execute()
+            ).execute))
 
             # Comprehensive logging
             logger.info(
@@ -164,7 +164,7 @@ class UserModel:
             try:
                 supabase = get_supabase()
                 response = (
-                    supabase.table("users").select("*").eq("user_id", user_id).execute()
+                    (await asyncio.to_thread(supabase.table("users").select("*").eq("user_id", user_id).execute))
                 )
                 if response.data:
                     user_data = response.data[0]
@@ -418,7 +418,7 @@ class UserModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users").select("*").eq("user_id", user_id).execute()
+                (await asyncio.to_thread(supabase.table("users").select("*").eq("user_id", user_id).execute))
             )
             if response.data:
                 user_data = response.data[0]
@@ -436,12 +436,11 @@ class UserModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .select("*")
                 .gt("total_points", 0)
                 .order("total_points", desc=True)
-                .limit(limit)
-                .execute()
+                .limit(limit).execute))
             )
             # Add mention to each user
             for user in response.data:
@@ -460,11 +459,10 @@ class UserModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .select("total_points")
                 .order("total_points", desc=True)
-                .limit(1)
-                .execute()
+                .limit(1).execute))
             )
             return response.data[0]["total_points"] if response.data else 0
         except Exception as e:
@@ -486,9 +484,9 @@ class UserModel:
 
             new_streak = (user.get("current_streak") or 0) + 1 if last_date_raw == yesterday else 1
 
-            supabase.table("users").update(
+            (await asyncio.to_thread(supabase.table("users").update(
                 {"current_streak": new_streak, "last_streak_date": activity_date.isoformat()}
-            ).eq("user_id", user_id).execute()
+            ).eq("user_id", user_id).execute))
             return new_streak
         except Exception as e:
             logger.error(f"ERROR | update_streak | User: {user_id} | {e}")
@@ -512,11 +510,10 @@ class UserModel:
 
             supabase = get_supabase()
             history_response = (
-                supabase.table("points_history")
+                (await asyncio.to_thread(supabase.table("points_history")
                 .select("user_id, points_change")
                 .gte("created_at", range_start_utc.isoformat())
-                .lt("created_at", range_end_utc.isoformat())
-                .execute()
+                .lt("created_at", range_end_utc.isoformat()).execute))
             )
 
             totals: Dict[int, float] = {}
@@ -535,7 +532,7 @@ class UserModel:
                 return []
 
             users_response = (
-                supabase.table("users").select("*").in_("user_id", ranked_ids).execute()
+                (await asyncio.to_thread(supabase.table("users").select("*").in_("user_id", ranked_ids).execute))
             )
             users_by_id = {u["user_id"]: u for u in users_response.data}
 
@@ -596,12 +593,12 @@ class UserModel:
             user = await UserModel.get_by_id(user_id)
             new_referral_count = user.get("referral_count", 0) + count
 
-            supabase.table("users").update(
+            (await asyncio.to_thread(supabase.table("users").update(
                 {
                     "referral_count": new_referral_count,
                     "updated_at": datetime.utcnow().isoformat(),
                 }
-            ).eq("user_id", user_id).execute()
+            ).eq("user_id", user_id).execute))
 
             logger.info(
                 f"REFERRALS ADDED | User: {user_id} | +{count} | New Total: {new_referral_count}"
@@ -622,15 +619,14 @@ class UserModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .update(
                     {
                         "is_scaler": is_scaler,
                         "updated_at": datetime.utcnow().isoformat(),
                     }
                 )
-                .eq("user_id", user_id)
-                .execute()
+                .eq("user_id", user_id).execute))
             )
 
             logger.info(f"SCALER STATUS SET | User: {user_id} | Is Scaler: {is_scaler}")
@@ -652,15 +648,14 @@ class UserModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .update(
                     {
                         "is_master": is_master,
                         "updated_at": datetime.utcnow().isoformat(),
                     }
                 )
-                .eq("user_id", user_id)
-                .execute()
+                .eq("user_id", user_id).execute))
             )
 
             logger.info(f"MASTER STATUS SET | User: {user_id} | Is Master: {is_master}")
@@ -781,11 +776,10 @@ class DailyActivityModel:
 
             # Check if activity exists
             response = (
-                supabase.table("daily_activity")
+                (await asyncio.to_thread(supabase.table("daily_activity")
                 .select("*")
                 .eq("user_id", user_id)
-                .eq("activity_date", activity_date.isoformat())
-                .execute()
+                .eq("activity_date", activity_date.isoformat()).execute))
             )
 
             if response.data:
@@ -794,10 +788,9 @@ class DailyActivityModel:
                 new_count = current["message_count"] + 1
 
                 response = (
-                    supabase.table("daily_activity")
+                    (await asyncio.to_thread(supabase.table("daily_activity")
                     .update({"message_count": new_count})
-                    .eq("id", current["id"])
-                    .execute()
+                    .eq("id", current["id"]).execute))
                 )
 
                 return response.data[0]
@@ -811,7 +804,7 @@ class DailyActivityModel:
                 }
 
                 response = (
-                    supabase.table("daily_activity").insert(new_activity).execute()
+                    (await asyncio.to_thread(supabase.table("daily_activity").insert(new_activity).execute))
                 )
                 logger.debug(
                     f"ACTIVITY TRACKED | User: {user_id} | Date: {activity_date}"
@@ -839,11 +832,10 @@ class DailyActivityModel:
 
             # Get activity record
             response = (
-                supabase.table("daily_activity")
+                (await asyncio.to_thread(supabase.table("daily_activity")
                 .select("*")
                 .eq("user_id", user_id)
-                .eq("activity_date", activity_date.isoformat())
-                .execute()
+                .eq("activity_date", activity_date.isoformat()).execute))
             )
 
             if not response.data:
@@ -854,9 +846,9 @@ class DailyActivityModel:
             # Check if already awarded and has enough messages
             if activity["points_awarded"] == 0 and activity["message_count"] >= 3:
                 # Award point
-                supabase.table("daily_activity").update({"points_awarded": 1}).eq(
+                (await asyncio.to_thread(supabase.table("daily_activity").update({"points_awarded": 1}).eq(
                     "id", activity["id"]
-                ).execute()
+                ).execute))
 
                 await UserModel.update_points(user_id, 1, "Daily activity", bot=bot)
                 await UserModel.update_streak(user_id, activity_date)
@@ -885,10 +877,9 @@ class ValuePostModel:
 
             # Check if exists
             response = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .select("*")
-                .eq("message_id", message_id)
-                .execute()
+                .eq("message_id", message_id).execute))
             )
 
             if response.data:
@@ -906,7 +897,7 @@ class ValuePostModel:
                 "total_points": 0,
             }
 
-            response = supabase.table("value_posts").insert(new_post).execute()
+            response = (await asyncio.to_thread(supabase.table("value_posts").insert(new_post).execute))
             logger.info(f"VALUE POST CREATED | User: {user_id} | Message: {message_id}")
             return response.data[0]
 
@@ -930,10 +921,9 @@ class ValuePostModel:
 
             # Get current post
             current_response = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .select("*")
-                .eq("message_id", message_id)
-                .execute()
+                .eq("message_id", message_id).execute))
             )
 
             if not current_response.data:
@@ -960,7 +950,7 @@ class ValuePostModel:
 
             # Update post
             response = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .update(
                     {
                         "reaction_counts": reaction_counts,
@@ -968,8 +958,7 @@ class ValuePostModel:
                         "updated_at": datetime.utcnow().isoformat(),
                     }
                 )
-                .eq("message_id", message_id)
-                .execute()
+                .eq("message_id", message_id).execute))
             )
 
             # Log reaction update
@@ -1001,12 +990,11 @@ class ValuePostModel:
             today = date.today().isoformat()
 
             response = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .select("id", count="exact")
                 .eq("user_id", user_id)
                 .eq("post_date", today)
-                .eq("season", CURRENT_SEASON)
-                .execute()
+                .eq("season", CURRENT_SEASON).execute))
             )
 
             return response.count or 0
@@ -1032,7 +1020,7 @@ class DailyTodoModel:
                 "season": CURRENT_SEASON,
             }
 
-            response = supabase.table("daily_todos").insert(new_post).execute()
+            response = (await asyncio.to_thread(supabase.table("daily_todos").insert(new_post).execute))
             logger.info(f"TODO POST CREATED | User: {user_id} | Message: {message_id}")
             return response.data[0]
 
@@ -1048,12 +1036,11 @@ class DailyTodoModel:
             today = date.today().isoformat()
 
             response = (
-                supabase.table("daily_todos")
+                (await asyncio.to_thread(supabase.table("daily_todos")
                 .select("id", count="exact")
                 .eq("user_id", user_id)
                 .eq("post_date", today)
-                .eq("season", CURRENT_SEASON)
-                .execute()
+                .eq("season", CURRENT_SEASON).execute))
             )
 
             count = response.count or 0
@@ -1081,7 +1068,7 @@ class CallsPostModel:
                 "season": CURRENT_SEASON,
             }
 
-            response = supabase.table("calls_posts").insert(new_post).execute()
+            response = (await asyncio.to_thread(supabase.table("calls_posts").insert(new_post).execute))
             logger.info(f"CALLS POST CREATED | User: {user_id} | Message: {message_id}")
             return response.data[0]
 
@@ -1131,12 +1118,11 @@ class WeeklyVictoryModel:
 
             supabase = get_supabase()
             history_response = (
-                supabase.table("points_history")
+                (await asyncio.to_thread(supabase.table("points_history")
                 .select("user_id, points_change")
                 .eq("category", "consistency")
                 .gte("created_at", week_start_utc.isoformat())
-                .lt("created_at", week_end_utc.isoformat())
-                .execute()
+                .lt("created_at", week_end_utc.isoformat()).execute))
             )
 
             totals: Dict[int, float] = {}
@@ -1148,7 +1134,7 @@ class WeeklyVictoryModel:
             winners = [uid for uid, pts in totals.items() if pts >= threshold]
 
             for uid in winners:
-                supabase.table("weekly_victories").upsert(
+                (await asyncio.to_thread(supabase.table("weekly_victories").upsert(
                     {
                         "user_id": uid,
                         "season": season,
@@ -1157,7 +1143,7 @@ class WeeklyVictoryModel:
                         "threshold": threshold,
                     },
                     on_conflict="user_id,season,week_number",
-                ).execute()
+                ).execute))
 
                 if bot:
                     await UserModel._sync_named_role(
@@ -1247,12 +1233,11 @@ class WeeklyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("weekly_victories")
+                (await asyncio.to_thread(supabase.table("weekly_victories")
                 .select("*")
                 .eq("season", season)
                 .eq("week_number", week_number)
-                .order("points_earned", desc=True)
-                .execute()
+                .order("points_earned", desc=True).execute))
             )
             for row in response.data:
                 row["mention"] = f"<@{row['user_id']}>"
@@ -1271,11 +1256,10 @@ class WeeklyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .select("*")
                 .eq("is_official_finisher", True)
-                .order("total_points", desc=True)
-                .execute()
+                .order("total_points", desc=True).execute))
             )
             for row in response.data:
                 row["mention"] = f"<@{row['user_id']}>"
@@ -1290,11 +1274,10 @@ class WeeklyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("weekly_victories")
+                (await asyncio.to_thread(supabase.table("weekly_victories")
                 .select("id", count="exact")
                 .eq("user_id", user_id)
-                .eq("season", season)
-                .execute()
+                .eq("season", season).execute))
             )
             return response.count or 0
         except Exception as e:
@@ -1372,9 +1355,9 @@ class WeeklyVictoryModel:
                 return False
 
             supabase = get_supabase()
-            supabase.table("users").update({"is_official_finisher": True}).eq(
+            (await asyncio.to_thread(supabase.table("users").update({"is_official_finisher": True}).eq(
                 "user_id", user_id
-            ).execute()
+            ).execute))
 
             logger.info(
                 f"OFFICIAL FINISHER | User: {user_id} | Weeks won: {weeks_won}/{total_weeks}"
@@ -1409,7 +1392,7 @@ class WeeklyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users").select("user_id").gt("total_points", 0).execute()
+                (await asyncio.to_thread(supabase.table("users").select("user_id").gt("total_points", 0).execute))
             )
             user_ids = [row["user_id"] for row in response.data]
 
@@ -1479,12 +1462,11 @@ class MonthlyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("weekly_victories")
+                (await asyncio.to_thread(supabase.table("weekly_victories")
                 .select("user_id, week_number")
                 .eq("season", season)
                 .gte("week_number", first_week)
-                .lte("week_number", last_week)
-                .execute()
+                .lte("week_number", last_week).execute))
             )
 
             weeks_won_by_user: Dict[int, int] = {}
@@ -1498,7 +1480,7 @@ class MonthlyVictoryModel:
             ]
 
             for uid in winners:
-                supabase.table("monthly_victories").upsert(
+                (await asyncio.to_thread(supabase.table("monthly_victories").upsert(
                     {
                         "user_id": uid,
                         "season": season,
@@ -1507,7 +1489,7 @@ class MonthlyVictoryModel:
                         "weeks_required": weeks_needed,
                     },
                     on_conflict="user_id,season,month_number",
-                ).execute()
+                ).execute))
 
                 if bot:
                     await UserModel._sync_named_role(
@@ -1597,12 +1579,11 @@ class MonthlyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("monthly_victories")
+                (await asyncio.to_thread(supabase.table("monthly_victories")
                 .select("*")
                 .eq("season", season)
                 .eq("month_number", month_number)
-                .order("weeks_won", desc=True)
-                .execute()
+                .order("weeks_won", desc=True).execute))
             )
             for row in response.data:
                 row["mention"] = f"<@{row['user_id']}>"
@@ -1617,11 +1598,10 @@ class MonthlyVictoryModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("monthly_victories")
+                (await asyncio.to_thread(supabase.table("monthly_victories")
                 .select("id", count="exact")
                 .eq("user_id", user_id)
-                .eq("season", season)
-                .execute()
+                .eq("season", season).execute))
             )
             return response.count or 0
         except Exception as e:
@@ -1650,17 +1630,17 @@ class RaffleTicketModel:
                 return 0
             new_total = user.get("raffle_tickets", 0) + tickets
 
-            supabase.table("users").update({"raffle_tickets": new_total}).eq(
+            (await asyncio.to_thread(supabase.table("users").update({"raffle_tickets": new_total}).eq(
                 "user_id", user_id
-            ).execute()
-            supabase.table("raffle_ticket_history").insert(
+            ).execute))
+            (await asyncio.to_thread(supabase.table("raffle_ticket_history").insert(
                 {
                     "user_id": user_id,
                     "season": season,
                     "tickets_change": tickets,
                     "reason": reason,
                 }
-            ).execute()
+            ).execute))
 
             logger.info(
                 f"RAFFLE TICKETS | User: {user_id} | +{tickets} | "
@@ -1683,11 +1663,10 @@ class RaffleTicketModel:
         try:
             supabase = get_supabase()
             existing = (
-                supabase.table("raffle_ticket_history")
+                (await asyncio.to_thread(supabase.table("raffle_ticket_history")
                 .select("id")
                 .eq("user_id", user_id)
-                .eq("reason", reason)
-                .execute()
+                .eq("reason", reason).execute))
             )
             if existing.data:
                 return False
@@ -1713,12 +1692,11 @@ class RaffleTicketModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .select("*")
                 .gt("raffle_tickets", 0)
                 .order("raffle_tickets", desc=True)
-                .limit(limit)
-                .execute()
+                .limit(limit).execute))
             )
             for user in response.data:
                 user["mention"] = f"<@{user['user_id']}>"
@@ -1795,29 +1773,25 @@ class GoldenTicketModel:
             today = date.today().isoformat()
 
             activity_resp = (
-                supabase.table("daily_activity")
+                (await asyncio.to_thread(supabase.table("daily_activity")
                 .select("user_id")
                 .eq("activity_date", today)
-                .eq("points_awarded", 1)
-                .execute()
+                .eq("points_awarded", 1).execute))
             )
             todo_resp = (
-                supabase.table("daily_todos")
+                (await asyncio.to_thread(supabase.table("daily_todos")
                 .select("user_id")
-                .eq("post_date", today)
-                .execute()
+                .eq("post_date", today).execute))
             )
             calls_resp = (
-                supabase.table("calls_posts")
+                (await asyncio.to_thread(supabase.table("calls_posts")
                 .select("user_id")
-                .eq("post_date", today)
-                .execute()
+                .eq("post_date", today).execute))
             )
             value_resp = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .select("user_id")
-                .eq("post_date", today)
-                .execute()
+                .eq("post_date", today).execute))
             )
 
             activity_ids = {r["user_id"] for r in activity_resp.data}
@@ -1863,10 +1837,9 @@ class GoldenTicketModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .select("user_id")
-                .gte("current_streak", GOLDEN_TICKET_STREAK_DAYS)
-                .execute()
+                .gte("current_streak", GOLDEN_TICKET_STREAK_DAYS).execute))
             )
             token = datetime.utcnow().isoformat()
             awarded = []
@@ -1918,9 +1891,9 @@ class ChampionshipModel:
                     uid, RAFFLE_TICKETS["FINAL_TOP_25"], "Final Top 25", season=season
                 )
                 if not user.get("is_founder"):
-                    supabase.table("users").update({"is_founder": True}).eq(
+                    (await asyncio.to_thread(supabase.table("users").update({"is_founder": True}).eq(
                         "user_id", uid
-                    ).execute()
+                    ).execute))
                     if bot:
                         await UserModel._sync_named_role(
                             bot,
@@ -1941,9 +1914,9 @@ class ChampionshipModel:
                         uid, RAFFLE_TICKETS["GRAND_CHAMPION"], "Grand Champion", season=season
                     )
                     if not user.get("is_grand_champion"):
-                        supabase.table("users").update({"is_grand_champion": True}).eq(
+                        (await asyncio.to_thread(supabase.table("users").update({"is_grand_champion": True}).eq(
                             "user_id", uid
-                        ).execute()
+                        ).execute))
                         if bot:
                             await UserModel._sync_named_role(
                                 bot,
@@ -1989,11 +1962,10 @@ class RaffleDrawModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("raffle_draw_winners")
+                (await asyncio.to_thread(supabase.table("raffle_draw_winners")
                 .select("id")
                 .eq("season", season)
-                .limit(1)
-                .execute()
+                .limit(1).execute))
             )
             return bool(response.data)
         except Exception as e:
@@ -2017,10 +1989,9 @@ class RaffleDrawModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("users")
+                (await asyncio.to_thread(supabase.table("users")
                 .select("user_id, raffle_tickets")
-                .gt("raffle_tickets", 0)
-                .execute()
+                .gt("raffle_tickets", 0).execute))
             )
             pool = [(row["user_id"], row["raffle_tickets"]) for row in response.data]
 
@@ -2035,9 +2006,9 @@ class RaffleDrawModel:
                     pool = [p for p in pool if p[0] != chosen]
 
                 for uid in winners:
-                    supabase.table("raffle_draw_winners").insert(
+                    (await asyncio.to_thread(supabase.table("raffle_draw_winners").insert(
                         {"user_id": uid, "season": season, "tier": tier_key}
-                    ).execute()
+                    ).execute))
 
                 results[tier_key] = winners
 
@@ -2073,10 +2044,9 @@ class RaffleDrawModel:
         try:
             supabase = get_supabase()
             response = (
-                supabase.table("raffle_draw_winners")
+                (await asyncio.to_thread(supabase.table("raffle_draw_winners")
                 .select("*")
-                .eq("season", season)
-                .execute()
+                .eq("season", season).execute))
             )
             if not response.data:
                 return {}

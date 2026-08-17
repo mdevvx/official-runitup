@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime, time
@@ -122,7 +123,7 @@ class Tasks(commands.Cog):
 
             # Get all users with points
             supabase = get_supabase()
-            response = supabase.table("users").select("*").execute()
+            response = (await asyncio.to_thread(supabase.table("users").select("*").execute))
 
             updated_count = 0
 
@@ -249,10 +250,9 @@ class Tasks(commands.Cog):
             cutoff_date = (date.today() - timedelta(days=30)).isoformat()
 
             result = (
-                supabase.table("daily_activity")
+                (await asyncio.to_thread(supabase.table("daily_activity")
                 .delete()
-                .lt("activity_date", cutoff_date)
-                .execute()
+                .lt("activity_date", cutoff_date).execute))
             )
 
             if result.data:
@@ -260,10 +260,10 @@ class Tasks(commands.Cog):
 
             # Log database stats
             users_count = (
-                supabase.table("users").select("*", count="exact").execute().count
+                (await asyncio.to_thread(supabase.table("users").select("*", count="exact").execute)).count
             )
             submissions_count = (
-                supabase.table("submissions").select("*", count="exact").execute().count
+                (await asyncio.to_thread(supabase.table("submissions").select("*", count="exact").execute)).count
             )
 
             logger.info(

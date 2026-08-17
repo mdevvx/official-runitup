@@ -26,14 +26,46 @@ class WinsRelay(commands.Cog):
         logger.info("WinsRelay cog loaded")
 
     async def _get_webhook(
-        self, channel: discord.TextChannel
+        self, channel: discord.TextChannel, force_refresh: bool = False
     ) -> Optional[discord.Webhook]:
-        """Get (or create) the relay's webhook for a channel, cached per
-        channel so we don't re-fetch/re-create on every message - Discord
-        caps webhooks at 15 per channel."""
-        cached = self._webhooks.get(channel.id)
-        if cached:
-            return cached
+        """Get the relay's webhook for a channel, cached per channel so we
+        don't re-resolve it on every message.
+
+        Prefers a URL registered via /relaywebhookseturl: Discord's list-
+        webhooks endpoint never includes a webhook's token (only the
+        response from *creating* one does), so a webhook found via
+        channel.webhooks() can never actually send - it'll fail with
+        "This webhook does not have a token associated with it". Building
+        from the URL instead carries the token straight through.
+
+        Falls back to list-or-create when no URL is registered, but note
+        that path only works for channels without aggressive webhook
+        auto-moderation - some servers run a "webhook protection" bot that
+        deletes any webhook a bot creates within milliseconds, which is
+        exactly why the URL-registration path exists.
+
+        force_refresh=True skips the cache and re-resolves - used when the
+        cached webhook turned out to be gone/invalid (the cache is
+        in-memory only, so it has no way to notice that on its own)."""
+        if not force_refresh:
+            cached = self._webhooks.get(channel.id)
+            if cached:
+                return cached
+
+        from database.bot_config import BotConfigModel
+
+        stored_url = BotConfigModel.get_webhook_url(channel.id)
+        if stored_url:
+            try:
+                webhook = discord.Webhook.from_url(stored_url, client=self.bot)
+            except ValueError:
+                logger.error(
+                    f"WINS RELAY FAILED | Registered webhook URL for #{channel.name} "
+                    f"({channel.id}) is malformed - re-register with /relaywebhookseturl."
+                )
+                return None
+            self._webhooks[channel.id] = webhook
+            return webhook
 
         try:
             existing = await channel.webhooks()
@@ -100,41 +132,61 @@ class WinsRelay(commands.Cog):
                 )
                 return False
 
-            webhook = await self._get_webhook(destination)
-            if not webhook:
-                return False
-
-            # Re-download and re-upload attachments rather than linking the
-            # original CDN URLs - Discord attachment URLs are signed and
-            # expire, so old backfilled links would eventually break.
-            files = []
-            for attachment in message.attachments:
-                try:
-                    files.append(await attachment.to_file())
-                except (discord.HTTPException, discord.NotFound):
-                    pass  # Source attachment no longer available - skip it
-
             # Forward any rich embeds from the original (link previews, etc.)
             embeds = [e for e in message.embeds if e.type in ("rich", "article", "link")]
 
-            await webhook.send(
-                content=message.content or None,
-                username=message.author.display_name,
-                avatar_url=message.author.display_avatar.url,
-                files=files,
-                embeds=embeds,
-                # Cross-server mentions don't resolve to anyone meaningful
-                # in RunItUp and could accidentally ping the wrong person -
-                # suppress all of them.
-                allowed_mentions=discord.AllowedMentions.none(),
-                wait=True,
-            )
+            # Up to 2 attempts: if the cached webhook was deleted on
+            # Discord's side (e.g. someone cleaned it up manually), the
+            # in-memory cache has no way to know - retry once with a freshly
+            # created webhook before giving up.
+            for attempt in range(2):
+                webhook = await self._get_webhook(
+                    destination, force_refresh=(attempt == 1)
+                )
+                if not webhook:
+                    return False
 
-            logger.info(
-                f"WINS RELAY SUCCESS | Author: {message.author} ({message.author.id}) | "
-                f"Message: {message.id} | Destination: {destination.guild.name} #{destination.name}"
-            )
-            return True
+                # Re-download and re-upload attachments rather than linking
+                # the original CDN URLs - Discord attachment URLs are signed
+                # and expire, so old backfilled links would eventually
+                # break. Built fresh each attempt since discord.File streams
+                # are single-use.
+                files = []
+                for attachment in message.attachments:
+                    try:
+                        files.append(await attachment.to_file())
+                    except (discord.HTTPException, discord.NotFound):
+                        pass  # Source attachment no longer available - skip it
+
+                try:
+                    await webhook.send(
+                        content=message.content or None,
+                        username=message.author.display_name,
+                        avatar_url=message.author.display_avatar.url,
+                        files=files,
+                        embeds=embeds,
+                        # Cross-server mentions don't resolve to anyone
+                        # meaningful in RunItUp and could accidentally ping
+                        # the wrong person - suppress all of them.
+                        allowed_mentions=discord.AllowedMentions.none(),
+                        wait=True,
+                    )
+                except discord.NotFound:
+                    self._webhooks.pop(destination.id, None)
+                    if attempt == 0:
+                        logger.warning(
+                            f"WINS RELAY | Cached webhook for #{destination.name} "
+                            "no longer exists on Discord - recreating and "
+                            "retrying once."
+                        )
+                        continue
+                    raise
+
+                logger.info(
+                    f"WINS RELAY SUCCESS | Author: {message.author} ({message.author.id}) | "
+                    f"Message: {message.id} | Destination: {destination.guild.name} #{destination.name}"
+                )
+                return True
 
         except discord.Forbidden:
             logger.error(
@@ -287,10 +339,54 @@ async def relay_wins_backfill(
         )
 
 
+@app_commands.command(
+    name="relaywebhookseturl",
+    description="[ADMIN] Register a manually-created webhook URL for a relay destination channel",
+)
+@app_commands.describe(
+    channel="The channel this webhook posts into",
+    url="The webhook's URL, from Channel Settings → Integrations → Webhooks → Copy Webhook URL",
+)
+async def relay_webhook_set_url(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    url: str,
+):
+    if not await has_admin_role(interaction):
+        await send_error_embed(
+            interaction, "❌ You don't have permission to use admin commands."
+        )
+        return
+
+    try:
+        discord.Webhook.from_url(url, client=interaction.client)
+    except ValueError:
+        await send_error_embed(
+            interaction, "❌ That doesn't look like a valid Discord webhook URL."
+        )
+        return
+
+    from database.bot_config import BotConfigModel
+
+    await BotConfigModel.set_webhook_url(channel.id, url, updated_by=interaction.user.id)
+
+    cog = interaction.client.get_cog("WinsRelay")
+    if cog:
+        # Drop any cached webhook for this channel so the new URL takes
+        # effect immediately instead of waiting for a NotFound to evict it.
+        cog._webhooks.pop(channel.id, None)
+
+    await interaction.response.send_message(
+        f"✅ Registered a webhook for {channel.mention}. The relay will use it from now on.",
+        ephemeral=True,
+    )
+
+
 async def setup(bot):
     await bot.add_cog(WinsRelay(bot))
-    # Standalone top-level command, deliberately not under /<season> -
+    # Standalone top-level commands, deliberately not under /<season> -
     # this relay is permanent cross-server infra, not a per-season
     # challenge mechanic, so it shouldn't get renamed every time
     # CURRENT_SEASON changes.
     bot.tree.add_command(relay_wins_backfill)
+    bot.tree.add_command(relay_webhook_set_url)

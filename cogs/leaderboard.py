@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands
 from datetime import datetime
@@ -348,10 +349,9 @@ class Leaderboard(commands.Cog):
             supabase = get_supabase()
 
             value_response = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .select("*")
-                .eq("message_id", payload.message_id)
-                .execute()
+                .eq("message_id", payload.message_id).execute))
             )
 
             if value_response.data:
@@ -373,16 +373,15 @@ class Leaderboard(commands.Cog):
                         payload.message_id,
                         post["total_points"],
                     )
-                supabase.table("value_posts").delete().eq(
+                (await asyncio.to_thread(supabase.table("value_posts").delete().eq(
                     "message_id", payload.message_id
-                ).execute()
+                ).execute))
                 return
 
             todo_response = (
-                supabase.table("daily_todos")
+                (await asyncio.to_thread(supabase.table("daily_todos")
                 .select("*")
-                .eq("message_id", payload.message_id)
-                .execute()
+                .eq("message_id", payload.message_id).execute))
             )
 
             if todo_response.data:
@@ -403,16 +402,15 @@ class Leaderboard(commands.Cog):
                     payload.message_id,
                     POINTS["DAILY_TODO"],
                 )
-                supabase.table("daily_todos").delete().eq(
+                (await asyncio.to_thread(supabase.table("daily_todos").delete().eq(
                     "message_id", payload.message_id
-                ).execute()
+                ).execute))
                 return
 
             calls_response = (
-                supabase.table("calls_posts")
+                (await asyncio.to_thread(supabase.table("calls_posts")
                 .select("*")
-                .eq("message_id", payload.message_id)
-                .execute()
+                .eq("message_id", payload.message_id).execute))
             )
 
             if calls_response.data:
@@ -433,9 +431,9 @@ class Leaderboard(commands.Cog):
                     payload.message_id,
                     POINTS["CALLS_POST"],
                 )
-                supabase.table("calls_posts").delete().eq(
+                (await asyncio.to_thread(supabase.table("calls_posts").delete().eq(
                     "message_id", payload.message_id
-                ).execute()
+                ).execute))
 
         except Exception as e:
             logger.error(
@@ -457,10 +455,9 @@ class Leaderboard(commands.Cog):
 
             supabase = get_supabase()
             response = (
-                supabase.table("value_posts")
+                (await asyncio.to_thread(supabase.table("value_posts")
                 .select("*")
-                .eq("channel_id", channel.id)
-                .execute()
+                .eq("channel_id", channel.id).execute))
             )
 
             for post in response.data:
@@ -469,9 +466,9 @@ class Leaderboard(commands.Cog):
                 is_pinned = message_id in pinned_ids
 
                 if was_pinned != is_pinned:
-                    supabase.table("value_posts").update({"is_pinned": is_pinned}).eq(
+                    (await asyncio.to_thread(supabase.table("value_posts").update({"is_pinned": is_pinned}).eq(
                         "message_id", message_id
-                    ).execute()
+                    ).execute))
 
                     points_change = POINTS["PINNED"] if is_pinned else -POINTS["PINNED"]
                     await UserModel.update_points(
@@ -482,9 +479,9 @@ class Leaderboard(commands.Cog):
                     )
 
                     new_total = post["total_points"] + points_change
-                    supabase.table("value_posts").update(
+                    (await asyncio.to_thread(supabase.table("value_posts").update(
                         {"total_points": new_total}
-                    ).eq("message_id", message_id).execute()
+                    ).eq("message_id", message_id).execute))
 
                     logger.info(
                         f"POST {'PINNED' if is_pinned else 'UNPINNED'} | "

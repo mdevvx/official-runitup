@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -313,13 +314,12 @@ async def view_user(interaction: discord.Interaction, user: discord.Member):
 
         supabase = get_supabase()
         history_response = (
-            supabase.table("points_history")
+            (await asyncio.to_thread(supabase.table("points_history")
             .select("*")
             .eq("user_id", user.id)
             .eq("season", CURRENT_SEASON)
             .order("created_at", desc=True)
-            .limit(5)
-            .execute()
+            .limit(5).execute))
         )
 
         if history_response.data:
