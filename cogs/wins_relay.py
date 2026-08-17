@@ -232,11 +232,11 @@ class WinsRelay(commands.Cog):
 
 @app_commands.command(
     name="relaywinsbackfill",
-    description="[ADMIN] One-time: copy all Dialed #wins history into a chosen RunItUp channel (skips posts already copied)",
+    description="[ADMIN] One-time: copy Dialed #wins history into a chosen RunItUp channel",
 )
 @app_commands.describe(
-    destination="RunItUp channel to copy the history into (e.g. #ecom-wins) - separate from the live automation's channel",
-    limit="Max messages to scan from history, oldest first (leave blank for the full channel)",
+    destination="RunItUp channel to copy the history into (e.g. #ecom-wins)",
+    limit="Max messages to scan, oldest first (leave blank for the full channel)",
 )
 async def relay_wins_backfill(
     interaction: discord.Interaction,
