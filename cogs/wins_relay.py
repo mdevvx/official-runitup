@@ -3,7 +3,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Optional
-from config.constants import BRAND_COLOR
 
 from utils.logger import get_logger
 from utils.helpers import has_admin_role, send_error_embed
@@ -19,9 +18,37 @@ logger = get_logger(__name__)
 class WinsRelay(commands.Cog):
     """Cross-server wins relay: Dialed #wins → RunItUp #wins"""
 
+    WEBHOOK_NAME = "Wins Relay"
+
     def __init__(self, bot):
         self.bot = bot
+        self._webhooks: dict[int, discord.Webhook] = {}
         logger.info("WinsRelay cog loaded")
+
+    async def _get_webhook(
+        self, channel: discord.TextChannel
+    ) -> Optional[discord.Webhook]:
+        """Get (or create) the relay's webhook for a channel, cached per
+        channel so we don't re-fetch/re-create on every message - Discord
+        caps webhooks at 15 per channel."""
+        cached = self._webhooks.get(channel.id)
+        if cached:
+            return cached
+
+        try:
+            existing = await channel.webhooks()
+            webhook = next((w for w in existing if w.name == self.WEBHOOK_NAME), None)
+            if webhook is None:
+                webhook = await channel.create_webhook(name=self.WEBHOOK_NAME)
+        except discord.Forbidden:
+            logger.error(
+                f"WINS RELAY FAILED | Missing 'Manage Webhooks' permission in "
+                f"#{channel.name} ({channel.id})"
+            )
+            return None
+
+        self._webhooks[channel.id] = webhook
+        return webhook
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -56,10 +83,13 @@ class WinsRelay(commands.Cog):
     async def _relay_win(
         self, message: discord.Message, destination_channel_id: int
     ) -> bool:
-        """Relay a win message to the given destination channel. Returns
-        True on success. Does not add any confirmation reaction itself -
-        callers do that, since what the reaction *means* depends on which
-        destination/pipeline is calling (live relay vs. one-time backfill)."""
+        """Relay a win message to the given destination channel via a
+        webhook impersonating the original author (their display name +
+        avatar), so it reads as a native post rather than a bot embed.
+        Returns True on success. Does not add any confirmation reaction
+        itself - callers do that, since what the reaction *means* depends
+        on which destination/pipeline is calling (live relay vs. one-time
+        backfill)."""
         try:
             destination = self.bot.get_channel(destination_channel_id)
 
@@ -70,74 +100,35 @@ class WinsRelay(commands.Cog):
                 )
                 return False
 
-            # Build the relay embed
-            embed = discord.Embed(
-                description=message.content or "",
-                color=BRAND_COLOR,
-            )
+            webhook = await self._get_webhook(destination)
+            if not webhook:
+                return False
 
-            # embed.set_author(
-            #     name=f"{message.author.display_name} • from Dialed",
-            #     icon_url=(
-            #         message.author.display_avatar.url
-            #         if message.author.display_avatar
-            #         else None
-            #     ),
-            # )
-
-            # embed.set_footer(
-            #     text=f"🔗 Dialed Win  •  #{message.channel.name}",
-            # )
-            embed.set_author(
-                name=f"{message.author.display_name} (@{message.author.name})",
-                icon_url=(
-                    message.author.display_avatar.url
-                    if message.author.display_avatar
-                    else None
-                ),
-            )
-
-            embed.set_footer(
-                text=f"🔗 Dialed Win  •  #{message.channel.name}",
-            )
-
-            # Attach the first image inline if present
-            image_attached = False
-            other_attachments = []
-
+            # Re-download and re-upload attachments rather than linking the
+            # original CDN URLs - Discord attachment URLs are signed and
+            # expire, so old backfilled links would eventually break.
+            files = []
             for attachment in message.attachments:
-                if (
-                    not image_attached
-                    and attachment.content_type
-                    and attachment.content_type.startswith("image/")
-                ):
-                    embed.set_image(url=attachment.url)
-                    image_attached = True
-                else:
-                    other_attachments.append(attachment.url)
+                try:
+                    files.append(await attachment.to_file())
+                except (discord.HTTPException, discord.NotFound):
+                    pass  # Source attachment no longer available - skip it
 
-            # Add extra attachment links if any
-            if other_attachments:
-                embed.add_field(
-                    name="📎 Additional Attachments",
-                    value="\n".join(other_attachments),
-                    inline=False,
-                )
+            # Forward any rich embeds from the original (link previews, etc.)
+            embeds = [e for e in message.embeds if e.type in ("rich", "article", "link")]
 
-            # Forward any embeds from the original message (e.g. link previews)
-            original_embeds = message.embeds  # up to 10
-
-            # Send the relay embed
-            await destination.send(embed=embed)
-
-            # Re-send any rich embeds from the original (link previews, etc.)
-            for original_embed in original_embeds:
-                # Skip empty embeds
-                if original_embed.type in ("rich", "article", "link"):
-                    try:
-                        await destination.send(embed=original_embed)
-                    except Exception:
-                        pass  # Don't fail the whole relay over a preview
+            await webhook.send(
+                content=message.content or None,
+                username=message.author.display_name,
+                avatar_url=message.author.display_avatar.url,
+                files=files,
+                embeds=embeds,
+                # Cross-server mentions don't resolve to anyone meaningful
+                # in RunItUp and could accidentally ping the wrong person -
+                # suppress all of them.
+                allowed_mentions=discord.AllowedMentions.none(),
+                wait=True,
+            )
 
             logger.info(
                 f"WINS RELAY SUCCESS | Author: {message.author} ({message.author.id}) | "
@@ -175,12 +166,20 @@ class WinsRelay(commands.Cog):
         destination_channel_id: int,
         limit: Optional[int] = None,
         delay_seconds: float = 1.0,
+        force: bool = False,
     ) -> tuple[int, int, int]:
         """One-time migration: walk Dialed #wins history oldest-first and
         copy everything not already marked 📥 into destination_channel_id.
         Deliberately ignores the live relay's 🏆 marker - this is meant to
         copy the *full* history into a (possibly different) channel, not
         just what the live automation hasn't already handled elsewhere.
+
+        force=True re-copies everything regardless of the 📥 marker. Needed
+        because the marker only tracks "did we send this," not "does a copy
+        still exist at the destination" - if the destination copies get
+        deleted (e.g. to redo the formatting), the source messages are
+        still marked as done and would otherwise be skipped forever.
+
         Returns (relayed, skipped, failed)."""
         source = self.bot.get_channel(DIALED_WINS_CHANNEL_ID)
         if not source:
@@ -196,7 +195,7 @@ class WinsRelay(commands.Cog):
                 continue
             if message.reference is not None:
                 continue
-            if self._already_backfilled(message):
+            if not force and self._already_backfilled(message):
                 skipped += 1
                 continue
 
@@ -237,11 +236,13 @@ class WinsRelay(commands.Cog):
 @app_commands.describe(
     destination="RunItUp channel to copy the history into (e.g. #ecom-wins)",
     limit="Max messages to scan, oldest first (leave blank for the full channel)",
+    force="Re-copy everything, even posts already marked as backfilled (use after deleting a prior attempt)",
 )
 async def relay_wins_backfill(
     interaction: discord.Interaction,
     destination: discord.TextChannel,
     limit: Optional[int] = None,
+    force: bool = False,
 ):
     if not await has_admin_role(interaction):
         await send_error_embed(
@@ -258,7 +259,7 @@ async def relay_wins_backfill(
 
     try:
         relayed, skipped, failed = await cog.backfill(
-            destination_channel_id=destination.id, limit=limit
+            destination_channel_id=destination.id, limit=limit, force=force
         )
     except Exception as e:
         logger.error(f"WINS BACKFILL FAILED | {e}")
